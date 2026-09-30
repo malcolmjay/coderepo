@@ -3,7 +3,7 @@ from datetime import timedelta
 from threading import Barrier
 from types import SimpleNamespace
 
-from django.db import close_old_connections
+from django.db import close_old_connections, connections
 from django.test import TransactionTestCase, skipUnlessDBFeature
 from django.utils import timezone
 
@@ -35,7 +35,8 @@ class ConcurrentVerificationTests(TransactionTestCase):
                 barrier.wait(timeout=10)
                 return verify_code(request, "12345678") is not None
             finally:
-                close_old_connections()
+                # Thread-local persistent connections must close before Django drops the test DB.
+                connections.close_all()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(redeem) for _ in range(2)]
