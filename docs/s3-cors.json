@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://downloads.example.com"],
+    "AllowedMethods": ["POST"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "x-amz-version-id"],
+    "MaxAgeSeconds": 300
+  }
+]

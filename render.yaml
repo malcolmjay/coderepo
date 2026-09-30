@@ -1,0 +1,87 @@
+# Creates paid resources only when you explicitly connect/deploy this Blueprint.
+# Secret prompts belong to the web service; the worker references those same values.
+services:
+  - type: web
+    name: camera-hacks-portal
+    runtime: python
+    region: ohio
+    plan: 0.5c-512mb
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    preDeployCommand: python manage.py migrate --noinput && python manage.py check --deploy --fail-level ERROR
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 60
+    healthCheckPath: /health/
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: DEBUG
+        value: "false"
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: camera-hacks-db
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: SITE_ORIGIN
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_REGION
+        value: ca-central-1
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+  - type: worker
+    name: camera-hacks-email-worker
+    runtime: python
+    region: ohio
+    plan: 0.5c-512mb
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py send_login_emails
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: camera-hacks-db
+          property: connectionString
+      - key: SECRET_KEY
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: SECRET_KEY}
+      - key: SITE_ORIGIN
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: SITE_ORIGIN}
+      - key: S3_BUCKET
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: S3_BUCKET}
+      - key: DEFAULT_FROM_EMAIL
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: DEFAULT_FROM_EMAIL}
+      - key: EMAIL_HOST
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: EMAIL_HOST}
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: EMAIL_HOST_USER}
+      - key: EMAIL_HOST_PASSWORD
+        fromService: {type: web, name: camera-hacks-portal, envVarKey: EMAIL_HOST_PASSWORD}
+databases:
+  - name: camera-hacks-db
+    region: ohio
+    plan: 0.1c-256mb
+    diskSizeGB: 5
+    databaseName: camera_hacks
+    user: camera_hacks
+    ipAllowList: []

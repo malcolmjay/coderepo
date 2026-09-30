@@ -1,0 +1,3 @@
+{% extends 'portal/base.html' %}
+{% block title %}Check your email{% endblock %}
+{% block content %}<section class="panel verify-panel"><span class="tag">ONE MORE STEP</span><h1>Check your email.</h1><p>If that email has access, a sign-in code is on its way. Delivery can take a minute. Check your spam folder too.</p><form method="post" class="stack">{% csrf_token %}{{ form.as_p }}<button class="button" type="submit">Open my downloads <span aria-hidden="true">→</span></button></form><p class="fine">The code expires in 10 minutes. Enter it in this browser.</p><a class="text-link" href="{% url 'login' %}">Use a different email or request a new code</a></section>{% endblock %}
