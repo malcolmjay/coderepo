@@ -128,12 +128,15 @@ async function releasesPage(admin: boolean, token: number) {
     const query = document.querySelector<HTMLInputElement>("#search")!.value.toLowerCase();
     const category = document.querySelector<HTMLSelectElement>("#category")!.value;
     const seen = new Set<string>();
+    const latestIds = new Set<string>();
+    for (const release of currentReleases) {
+      const family = `${release.kind}:${release.title}:${release.compatibility}`;
+      if (!seen.has(family)) latestIds.add(release.id);
+      seen.add(family);
+    }
     const filtered = currentReleases.filter(r => (!category || r.kind === category) && `${r.title} ${r.compatibility} ${r.version} ${r.notes}`.toLowerCase().includes(query));
     document.querySelector("#count")!.textContent = `${filtered.length} of ${currentReleases.length} loaded`;
-    document.querySelector("#release-list")!.innerHTML = filtered.map(r => {
-      const key = `${r.kind}:${r.title}:${r.compatibility}`; const latest = !seen.has(key); seen.add(key);
-      return releaseCard(r, latest, admin);
-    }).join("") || `<div class="empty"><span class="empty-icon" aria-hidden="true">↓</span><h2>${query || category ? "No matching files." : "Files are on their way."}</h2><p>${query || category ? "Try another search, or load more releases below." : "Published firmware and 3D files will appear here."}</p></div>`;
+    document.querySelector("#release-list")!.innerHTML = filtered.map(r => releaseCard(r, latestIds.has(r.id), admin)).join("") || `<div class="empty"><span class="empty-icon" aria-hidden="true">↓</span><h2>${query || category ? "No matching files." : "Files are on their way."}</h2><p>${query || category ? "Try another search, or load more releases below." : "Published firmware and 3D files will appear here."}</p></div>`;
   };
   draw();
   document.querySelector("#search")!.addEventListener("input", draw);
