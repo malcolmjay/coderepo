@@ -1,44 +1,24 @@
-name: Portal checks
-on:
-  push:
-  pull_request:
+name: Firebase portal checks
+on: [push, pull_request]
 permissions:
   contents: read
 jobs:
   checks:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: portal
-          POSTGRES_USER: portal
-          POSTGRES_PASSWORD: ci-only-password
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U portal"
-          --health-interval 10s --health-timeout 5s --health-retries 5
-    env:
-      DEBUG: "true"
-      DATABASE_URL: postgresql://portal:ci-only-password@127.0.0.1:5432/portal
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install -r requirements-dev.txt
-      - run: ruff check . && ruff format --check .
-      - run: python manage.py collectstatic --noinput
-      - run: python manage.py test portal --verbosity 2
-      - run: python manage.py makemigrations --check --dry-run
-      - name: Production configuration checks
-        env:
-          DEBUG: "false"
-          SECRET_KEY: ci-only-placeholder-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz
-          SITE_ORIGIN: https://downloads.example.com
-          S3_BUCKET: ci-placeholder-private-bucket
-          EMAIL_HOST: smtp.example.com
-          DEFAULT_FROM_EMAIL: downloads@example.com
-          TRUST_PROXY_HEADERS: "true"
-        run: python manage.py check --deploy --fail-level ERROR
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm --prefix functions ci
+      - run: npm test
+      - run: npm run test:emulators

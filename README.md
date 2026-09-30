@@ -1,68 +1,70 @@
 # Camera Hacks customer downloads
 
-A small, passwordless customer portal for WLV-01 firmware, camera software, 3D files, and guides. Customers from Shopify, Kickstarter, or direct sales all use the same authorized email list.
+A small customer portal for WLV-01 firmware, camera software, printable parts, and guides. Customers from Shopify, Kickstarter, and direct sales share one authorized email list.
 
-## What is implemented
+The application now runs entirely within **one Firebase project**: Hosting, Authentication, Firestore, Cloud Storage, and one callable Cloud Function. Firebase sends the magic-link emails. There is no Django server, database server, email worker, S3 account, or external SMTP service to operate.
 
-- Email sign-in with eight-digit, single-use codes, a ten-minute expiry, and persistent request/verification limits.
-- A clean, responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
-- Administrator pages to add up to 100 emails at once, record purchase sources, revoke/restore access, upload files, edit release details, publish/unpublish, and inspect activity.
-- Private, versioned Amazon S3 storage. Downloads are authorized by the server and use 60-second links; uploaded files stay in draft until explicitly published.
-- Direct browser uploads with progress, up to 5 GiB per file. Uploads do not pass through the web server.
-- Django 5.2 LTS, PostgreSQL in production, a database-backed email outbox, SMTP with TLS, and a Render deployment blueprint.
+## Included
 
-**Status:** implemented starter application. No hosting account, email sender, bucket, custom domain, real customer list, or firmware payload is provisioned by this repository. Connect those services and complete the deployment smoke test before inviting customers. There are no demo credentials or public signup route.
+- Passwordless email links, including a confirmation form when a link is opened on another device.
+- A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
+- Admin pages to bulk-add up to 100 customer emails, record purchase sources, revoke/restore access, and view an activity log.
+- Direct resumable browser uploads up to 5 GiB, draft review, metadata editing, publication/unpublication, and draft removal.
+- Server-enforced customer and administrator authorization. Every download request checks current access and publication state.
+- Private, immutable file objects with generation-pinned download URLs that expire after 60 seconds. Permanent Firebase download tokens are removed during upload verification.
+- Firebase emulator integration tests, TypeScript builds, GitHub Actions, and monthly dependency update PRs.
 
-## Run locally
+**Status:** application code and deployment instructions are provided. No production Firebase project, billing account, domain, administrator email, customer list, or release payload has been provisioned. Production email delivery and signed downloads require the live smoke checks in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-Use Python 3.12 or later. These commands use an isolated local SQLite database and print sign-in emails in the worker terminal; they do not send email.
+## Local development
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt
-export DEBUG=true
-export SITE_ORIGIN=http://127.0.0.1:8000
-python manage.py migrate
-python manage.py grant_admin you@example.com
-python manage.py runserver 127.0.0.1:8000
-```
-
-In a second terminal with the same virtual environment and `DEBUG=true`:
+Use Node.js 22 and Java 21 or newer. The Firebase emulators run locally and do not send real emails or charge a cloud account.
 
 ```bash
-python manage.py send_login_emails
+npm ci
+npm --prefix functions ci
+cp .env.example .env.local
+npm run emulators
 ```
 
-Open `http://127.0.0.1:8000/`, enter the admin email you just added, and enter the code shown in the worker terminal. Go to **Admin → Customer access** to add customers. A real private S3 bucket is required to exercise uploads and downloads; the portal does not fall back to public URLs or public local media.
-
-`.env.example` documents configuration. The app reads environment variables directly and does not automatically load `.env` files. Never enable `DEBUG` on an internet-facing deployment.
-
-## Hosting and administration
-
-Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the Render, PostgreSQL, S3, SMTP, and domain setup. The deployment uses paid hosting resources; review provider charges before creating them. Files can live in Canada's `ca-central-1` S3 region; the supplied Render services/database use Ohio, so customer email metadata is not exclusively hosted in Canada.
-
-Administrators also sign in by email code. Initial admin access is provisioned from a trusted server shell:
+In another terminal:
 
 ```bash
-python manage.py grant_admin your-real-email@example.com
+npm run seed:local
+npm run dev
 ```
 
-To remove an administrator, first ensure another active administrator exists, then run `python manage.py grant_admin old-admin@example.com --revoke`. This invalidates that account's sessions. The web UI cannot grant administrator privileges or revoke an administrator.
+Open `http://127.0.0.1:5173`. Use `admin@example.com` or `customer@example.com`. Sign-in links appear in the Auth emulator terminal. The demo records are created only in the hard-coded `demo-camera-portal` emulator project. Emulator connections are disabled in production builds.
 
-All authorized customers see all published files in this first version. A revoked customer immediately loses future portal access, including old sessions. Bulk-adding an already existing email never silently restores revoked access. Restoring access requires a fresh sign-in. Customer additions do not send invitations.
+Uploads, publication, customer access, and rules can be exercised locally. Actual signed downloads use Google IAM signing and are deliberately not replaced with an insecure emulator endpoint; test them in a configured Firebase project.
 
-## Checks
+## Deploy and administer
+
+Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) to create the Firebase project, enable email-link sign-in, choose storage/database locations, configure runtime permissions, and grant the first administrator. The project needs the usage-based Blaze billing plan.
+
+Production reads its public Firebase client configuration automatically from Firebase Hosting. No service-account key belongs in the website or repository.
+
+Once connected:
 
 ```bash
-export DEBUG=true
-python manage.py collectstatic --noinput
-python manage.py test portal
-python manage.py makemigrations --check --dry-run
-ruff check .
-ruff format --check .
+npm run deploy
 ```
 
-GitHub Actions runs these checks against PostgreSQL. The security tests cover unknown emails, browser binding, expired/replayed/guessed codes, CSRF, revoked sessions, role boundaries, unpublished releases, safe filenames, and private version-pinned download signing. Tests mock SMTP/S3; they do not prove live email delivery or bucket permissions.
+The admin website manages customers and files. Administrator privileges are managed only with a trusted operator command:
 
-See [docs/SECURITY.md](docs/SECURITY.md) for the security model and operating limits.
+```bash
+node scripts/admin.mjs --project YOUR_PROJECT_ID --email you@example.com --grant
+```
+
+All approved customers see all published releases. A Firebase identity alone does not grant file access. Unknown emails can verify their identity but receive no customer data or downloads. Adding customers sends no invitation. Bulk-adding an existing email leaves its access state unchanged. After access is revoked and restored, a new sign-in is required.
+
+## Verification
+
+```bash
+npm test
+npm run test:emulators
+```
+
+The emulator suite exercises actual email links, callable Functions, Firestore rules, and cross-service Storage rules. It checks role boundaries, revoked sessions, draft visibility, upload validation, immutable objects, permanent-token removal, and publication/removal. Build and test commands are also run by GitHub Actions.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for authorization, signing, and operating limits. Code dependency updates and billing monitoring are still needed; the architecture removes server administration, not all maintenance.

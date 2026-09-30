@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function admin() {
+      let member = firestore.get(/databases/(default)/documents/members/$(request.auth.token.email.lower())).data;
+      return request.auth.token.email_verified == true
+        && member.active == true && member.role == 'admin'
+        && request.auth.token.auth_time * 1000 >= member.validAfter;
+    }
+    match /uploads/{releaseId}/payload {
+      // Create-only objects prevent replacing firmware underneath a release.
+      // Downloads use short-lived, generation-pinned URLs issued by a Function.
+      allow read, update, delete: if false;
+      allow create: if resource == null && request.auth != null && admin()
+        && firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.uploadedBy == request.auth.uid
+        && firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.status == 'uploading'
+        && request.resource.size == firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.size
+        && request.resource.size > 0 && request.resource.size <= 5368709120
+        && request.resource.contentType == 'application/octet-stream';
+    }
+    match /{path=**} { allow read, write: if false; }
+  }
+}

@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Customer records and releases are accessible only through authenticated
+    // callable Functions. Admin SDK access is authorized again in service.ts.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
