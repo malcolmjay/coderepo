@@ -2,6 +2,7 @@ import "./style.css";
 import { isSignInWithEmailLink, onAuthStateChanged, sendSignInLinkToEmail, signInWithEmailLink, signOut } from "firebase/auth";
 import { ref, uploadBytesResumable } from "firebase/storage";
 import { connect } from "./firebase";
+import { mountCustomerImport } from "./customer-import";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
@@ -19,6 +20,7 @@ let session: Access | null = null;
 let client: Awaited<ReturnType<typeof connect>>;
 let navigating = 0;
 let uploading = false;
+let importing = false;
 let completing = false;
 let currentReleases: Release[] = [];
 
@@ -200,16 +202,27 @@ async function customersPage(token: number) {
   const first = await client.api<Page<Customer>>("customers"); if (token !== navigating) return;
   let customers = first.items; let cursor = first.next;
   main.innerHTML = heading("Customer access.", "Every purchase source, one email list.") + adminNav("customers")
-    + `<section class="panel"><h2>Add customers</h2><p>Each authorized email gets access to all published files. Adding customers does not send invitations.</p><form id="customer-form" class="stack"><p><label for="emails">Email addresses</label><textarea id="emails" name="emails" rows="4" required placeholder="One email per line, up to 100 at a time"></textarea></p><p><label for="source">Purchase source (optional)</label><input id="source" name="source" maxlength="120" placeholder="Shopify, Kickstarter, direct sale…"></p><button class="button" type="submit">Add authorized emails</button></form></section><div class="filters"><label class="sr-only" for="customer-search">Search loaded customers</label><input id="customer-search" type="search" placeholder="Search loaded customers by email or purchase source"></div><div class="table-wrap"><table><thead><tr><th>Email</th><th>Source</th><th>Access</th><th>Action</th></tr></thead><tbody id="customers"></tbody></table></div><button class="button secondary load-more" id="more" ${cursor ? "" : "hidden"}>Load more customers</button>`;
+    + `<div id="customer-import"></div><div class="filters"><label class="sr-only" for="customer-search">Search loaded customers</label><input id="customer-search" type="search" placeholder="Search loaded customers by email or purchase source"></div><div class="table-wrap"><table><thead><tr><th>Email</th><th>Source</th><th>Access</th><th>Action</th></tr></thead><tbody id="customers"></tbody></table></div><button class="button secondary load-more" id="more" ${cursor ? "" : "hidden"}>Load more customers</button>`;
   const draw = () => {
     const query = document.querySelector<HTMLInputElement>("#customer-search")!.value.toLowerCase();
     document.querySelector("#customers")!.innerHTML = customers.filter(c => `${c.email} ${c.source}`.toLowerCase().includes(query)).map(c => `<tr><td>${esc(c.email)}${c.role === "admin" ? '<small class="table-sub">Administrator</small>' : ""}</td><td>${esc(c.source || "—")}</td><td><span class="badge ${c.active ? "" : "muted"}">${c.active ? "Active" : "Revoked"}</span></td><td>${c.role === "admin" ? "—" : `<button class="link-button ${c.active ? "danger" : ""}" data-email="${esc(c.email)}" data-active="${!c.active}">${c.active ? "Revoke" : "Restore"}</button>`}</td></tr>`).join("") || '<tr><td colspan="4">No customers found.</td></tr>';
   }; draw();
   document.querySelector("#customer-search")!.addEventListener("input", draw);
-  document.querySelector<HTMLFormElement>("#customer-form")!.addEventListener("submit", async event => {
-    event.preventDefault(); const form = event.currentTarget as HTMLFormElement; busy(form, true);
-    try {const result = await client.api<{added: number; skipped: number}>("addCustomers", Object.fromEntries(new FormData(form))); await route(); notice(`${result.added} customers added. ${result.skipped} existing addresses left unchanged.`);}
-    catch (error) {notice(errorMessage(error), true); busy(form, false);}
+  mountCustomerImport(document.querySelector<HTMLElement>("#customer-import")!, {
+    send: batch => client.api<{added: number; skipped: number}>("addCustomers", {emails: batch.emails.join("\n"), source: batch.source}),
+    busy: value => {
+      importing = value;
+      document.querySelectorAll<HTMLButtonElement>("#nav button, #customers button, #more").forEach(button => {button.disabled = value;});
+      document.querySelectorAll<HTMLAnchorElement>(".header a, .admin-nav a").forEach(link => {
+        if (value) link.setAttribute("aria-disabled", "true"); else link.removeAttribute("aria-disabled");
+      });
+    },
+    complete: async () => {
+      const refreshed = await client.api<Page<Customer>>("customers"); if (token !== navigating) return;
+      customers = refreshed.items; cursor = refreshed.next;
+      document.querySelector<HTMLButtonElement>("#more")!.hidden = !cursor; draw();
+    },
+    error: errorMessage,
   });
   document.querySelector("#customers")!.addEventListener("click", async event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-email]"); if (!button) return;
@@ -236,7 +249,7 @@ async function activityPage(token: number) {
 }
 
 async function route() {
-  if (!session || completing || uploading) return;
+  if (!session || completing || uploading || importing) return;
   const token = ++navigating;
   main.innerHTML = '<p class="loading" role="status">Loading…</p>';
   try {
@@ -258,8 +271,14 @@ async function route() {
   }
 }
 
-window.addEventListener("hashchange", () => {void route();});
-window.addEventListener("beforeunload", event => {if (uploading) {event.preventDefault(); event.returnValue = "";}});
+document.addEventListener("click", event => {
+  if (importing && (event.target as Element).closest(".header a, #nav button, .admin-nav a, #customers button, #more")) {event.preventDefault(); event.stopImmediatePropagation();}
+}, true);
+window.addEventListener("hashchange", () => {
+  if (importing) {history.replaceState(null, "", "#customers"); return;}
+  void route();
+});
+window.addEventListener("beforeunload", event => {if (uploading || importing) {event.preventDefault(); event.returnValue = "";}});
 try {
   client = await connect();
   if (isSignInWithEmailLink(client.auth, location.href)) await finishLink();
