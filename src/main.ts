@@ -62,7 +62,7 @@ function heading(title: string, description: string, admin = true) {
 
 function login(message = "") {
   session = null; navigation();
-  main.innerHTML = `<section class="login-layout"><div class="login-intro"><p class="eyebrow">THE CAMERA HACKS DOWNLOAD LIBRARY</p><h1>A little more<br>possibility.</h1><p class="lede">The latest software, firmware, and printable parts for your camera. All in one place.</p><div class="feature-list"><p><span>01</span> Camera software & firmware</p><p><span>02</span> 3D files & printable parts</p><p><span>03</span> Guides & release notes</p></div><p class="intro-note">For Camera Hacks customers, wherever you purchased.</p></div><div class="panel login-panel"><span class="tag">CUSTOMER ACCESS</span><h2>Welcome back.</h2><p>Enter your authorized email. We’ll send you a link to sign in—no password needed.</p><div id="notice" aria-live="polite"></div><form id="login-form" class="stack"><p><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></p><button class="button" type="submit">Send sign-in link <span aria-hidden="true">→</span></button></form><p class="fine">Use the email address authorized for your purchase.</p><div class="help-note"><strong>Need access?</strong><p>Contact Camera Hacks through the shop with your order details and the email you’d like to use.</p></div></div></section>`;
+  main.innerHTML = `<section class="login-layout"><div class="login-intro"><p class="eyebrow">THE CAMERA HACKS DOWNLOAD LIBRARY</p><h1>A Camera designed to be hacked.</h1><p class="lede">The latest software, firmware, and printable parts for your camera. All in one place.</p><div class="feature-list"><p><span>01</span> Camera software & firmware</p><p><span>02</span> 3D files & printable parts</p><p><span>03</span> Guides & release notes</p></div><p class="intro-note">For Camera Hacks customers, wherever you purchased.</p></div><div class="panel login-panel"><span class="tag">CUSTOMER ACCESS</span><h2>Welcome back.</h2><p>Enter your authorized email. We’ll send you a link to sign in—no password needed.</p><div id="notice" aria-live="polite"></div><form id="login-form" class="stack"><p><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></p><button class="button" type="submit">Send sign-in link <span aria-hidden="true">→</span></button></form><p class="fine">Use the email address authorized for your purchase.</p><div class="help-note"><strong>Need access?</strong><p>Contact Camera Hacks through the shop with your order details and the email you’d like to use.</p></div></div></section>`;
   if (message) notice(message, true);
   document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", async event => {
     event.preventDefault();
@@ -241,6 +241,10 @@ async function route() {
   main.innerHTML = '<p class="loading" role="status">Loading…</p>';
   try {
     const page = location.hash.slice(1);
+    nav.querySelectorAll<HTMLAnchorElement>("a").forEach(link => {
+      const active = link.hash === "#downloads" ? !["customers", "releases", "activity"].includes(page) : ["customers", "releases", "activity"].includes(page);
+      if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+    });
     if (session.role === "admin" && page === "customers") await customersPage(token);
     else if (session.role === "admin" && page === "releases") await releasesPage(true, token);
     else if (session.role === "admin" && page === "activity") await activityPage(token);
