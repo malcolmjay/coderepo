@@ -1,4 +1,5 @@
 import {MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL} from "./upload-config.js";
+import {DOWNLOAD_LICENSE} from "./download-license.js";
 export const CATEGORIES = ["firmware", "software", "models", "guide"] as const;
 
 export class PortalError extends Error {
@@ -69,4 +70,9 @@ export function bulkEmails(value: unknown): string[] {
 export function uploadSize(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > MAX_UPLOAD_BYTES) throw new PortalError("invalid-argument", `Choose a file between 1 byte and ${MAX_UPLOAD_LABEL}.`);
   return value as number;
+}
+
+export function assertDownloadLicense(accepted: unknown, version: unknown): void {
+  if (accepted !== true) throw new PortalError("failed-precondition", "Please agree to the Terms & Conditions, Software & Design Usage License before downloading.");
+  if (version !== DOWNLOAD_LICENSE.version) throw new PortalError("failed-precondition", "The download license has changed. Refresh this page and review the current license before downloading.");
 }

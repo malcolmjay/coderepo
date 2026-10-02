@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { getFirestore, type Transaction, type DocumentReference, type Query, type DocumentData } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
-import { assertAccess, bulkEmails, email, filename, PortalError, releaseFields, releaseId, text, uploadSize, type Identity, type Member } from "./domain.js";
+import { assertAccess, assertDownloadLicense, bulkEmails, email, filename, PortalError, releaseFields, releaseId, text, uploadSize, type Identity, type Member } from "./domain.js";
+import { DOWNLOAD_LICENSE } from "./download-license.js";
 
 const db = () => getFirestore();
 const memberRef = (value: string) => db().collection("members").doc(value);
@@ -210,6 +211,13 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
     const release = await db().collection("releases").doc(id).get();
     const record = release.data();
     if (!record || record.status !== "ready" || !record.generation || (!record.published && member.role !== "admin")) throw new PortalError("not-found", "This file is not available.");
+    assertDownloadLicense(data.licenseAccepted, data.licenseVersion);
+    // Record explicit consent before issuing a link, including the server's
+    // wording and timestamp. This records acceptance, not a completed transfer.
+    await auditRef().create({...activity(member.email, "Download license accepted", record.title),
+      uid: user.uid, releaseId: id, licenseVersion: DOWNLOAD_LICENSE.version,
+      licenseTitle: DOWNLOAD_LICENSE.title, licenseText: DOWNLOAD_LICENSE.paragraphs.join("\n\n"),
+      agreement: DOWNLOAD_LICENSE.agreement});
     // No emulator-only download backdoor: signed URLs require real IAM signing.
     const [url] = await getStorage().bucket().file(record.storagePath).getSignedUrl({
       version: "v4", action: "read", expires: now() + 60_000,

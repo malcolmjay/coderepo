@@ -7,6 +7,7 @@ import {getStorage as getAdminStorage} from 'firebase-admin/storage';
 import {initializeTestEnvironment, assertFails, assertSucceeds} from '@firebase/rules-unit-testing';
 import {doc, getDoc, setDoc} from 'firebase/firestore';
 import {ref, uploadBytes, getBytes, getMetadata, updateMetadata, deleteObject} from 'firebase/storage';
+import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
 
 const projectId = 'demo-camera-portal';
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Run tests with npm run test:emulators.');
@@ -140,6 +141,41 @@ test('metadata updates cannot replace a file or silently change publication', as
   await call(owner, 'saveRelease', {...fields, id: release.id, title: 'Updated release', published: false, generation: 'evil', storagePath: 'elsewhere'});
   const record = (await db.doc(`releases/${release.id}`).get()).data();
   assert.equal(record.published, true); assert.equal(record.storagePath, `releases/${release.id}/payload`); assert.notEqual(record.generation, 'evil');
+});
+test('download API rejects missing, false, forged and outdated consent for customers and admins', async () => {
+  const before = (await db.collection('activity').where('action', '==', 'Download license accepted').get()).size;
+  for (const user of [customer, owner]) {
+    for (const consent of [{}, {licenseAccepted: false, licenseVersion: DOWNLOAD_LICENSE.version},
+      {licenseAccepted: 'true', licenseVersion: DOWNLOAD_LICENSE.version}, {licenseAccepted: true},
+      {licenseAccepted: true, licenseVersion: 'old-version'}]) {
+      await denied(call(user, 'download', {id: release.id, ...consent}), 'FAILED_PRECONDITION');
+    }
+  }
+  assert.equal((await db.collection('activity').where('action', '==', 'Download license accepted').get()).size, before);
+});
+test('accepted license is recorded with trusted identity, wording and timestamp before IAM signing', async () => {
+  const consent = {licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version};
+  const before = Date.now();
+  // Emulators have no production IAM signing identity, but consent must be
+  // validated and recorded before any signed link could be issued.
+  await assert.rejects(call(customer, 'download', {id: release.id, ...consent,
+    uid: 'forged', email: 'forged@example.com', createdAt: 1, licenseText: 'forged'}), error => error.code === 'INTERNAL');
+  const entries = await db.collection('activity').where('action', '==', 'Download license accepted').get();
+  assert.equal(entries.size, 1);
+  const entry = entries.docs[0].data();
+  assert.equal(entry.actor, customer.email);
+  assert.equal(entry.uid, customer.uid);
+  assert.equal(entry.releaseId, release.id);
+  assert.equal(entry.licenseVersion, DOWNLOAD_LICENSE.version);
+  assert.equal(entry.licenseTitle, DOWNLOAD_LICENSE.title);
+  assert.equal(entry.licenseText, DOWNLOAD_LICENSE.paragraphs.join('\n\n'));
+  assert.equal(entry.agreement, DOWNLOAD_LICENSE.agreement);
+  assert(entry.createdAt >= before && entry.createdAt <= Date.now());
+  const context = env.authenticatedContext(customer.uid, {email: customer.email, email_verified: true});
+  await assertFails(getDoc(doc(context.firestore(), 'activity', entries.docs[0].id)));
+  await assertFails(setDoc(doc(context.firestore(), 'activity', entries.docs[0].id), {licenseVersion: 'forged'}));
+  await denied(call(stranger, 'download', {id: release.id, ...consent}));
+  await denied(call(revoked, 'download', {id: release.id, ...consent}));
 });
 test('revocation blocks existing sessions and restore requires a new sign-in', async () => {
   await call(owner, 'setAccess', {email: customer.email, active: false});

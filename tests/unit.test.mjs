@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {assertAccess, bulkEmails, email, filename, releaseFields, releaseId, uploadSize} from '../functions/lib/domain.js';
+import {assertAccess, assertDownloadLicense, bulkEmails, email, filename, releaseFields, releaseId, uploadSize} from '../functions/lib/domain.js';
+import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
 
 const identity = {uid: 'customer', email: 'customer@example.com', email_verified: true, auth_time: 100};
 const member = {email: identity.email, role: 'customer', active: true, validAfter: 0};
@@ -41,4 +42,13 @@ test('release validation rejects invalid categories, checksums, IDs and file siz
 test('publication fields cannot be smuggled into an ordinary metadata edit', () => {
   const result = releaseFields({...fields, published: true, storagePath: 'private/other', generation: '123', role: 'admin'});
   for (const field of ['published', 'storagePath', 'generation', 'role']) assert.equal(field in result, false);
+});
+test('download consent must be explicit and refer to the current license', () => {
+  for (const accepted of [undefined, null, false, 0, 1, 'true', {}, []]) {
+    assert.throws(() => assertDownloadLicense(accepted, DOWNLOAD_LICENSE.version), error => error.code === 'failed-precondition');
+  }
+  for (const version of [undefined, null, '', 'old-version', 20261002]) {
+    assert.throws(() => assertDownloadLicense(true, version), error => error.code === 'failed-precondition');
+  }
+  assert.doesNotThrow(() => assertDownloadLicense(true, DOWNLOAD_LICENSE.version));
 });

@@ -8,6 +8,7 @@ The application now runs entirely within **one Firebase project**: Hosting, Auth
 
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
+- The personal-use software and design license appears above the file list. An unchecked agreement box blocks downloads until selected; every download request also validates the current license version and records consent on the server.
 - Admin pages to import up to 10,000 customer emails from CSV or a pasted list, review invalid rows and duplicates, record purchase sources, revoke/restore access, and view an activity log.
 - Direct resumable browser uploads up to 20 GiB, including raw `.img` disk images, with in-page pause/resume and byte progress, draft review, metadata editing, publication/unpublication, and draft removal.
 - Server-enforced customer and administrator authorization. Every download request checks current access and publication state.
@@ -76,6 +77,6 @@ npm test
 npm run test:emulators
 ```
 
-The unit suite covers customer list parsing, validation, large imports, interrupted batches, and safe retries. The emulator suite exercises actual email links, callable Functions, Firestore rules, and cross-service Storage rules. It checks role boundaries, revoked sessions, draft visibility, upload validation, immutable objects, permanent-token removal, and publication/removal. Build and test commands are also run by GitHub Actions.
+The unit suite covers customer list parsing, validation, large imports, interrupted batches, safe retries, and explicit acceptance of the current download license. The emulator suite exercises actual email links, callable Functions, Firestore rules, and cross-service Storage rules. It checks role boundaries, revoked sessions, draft visibility, upload validation, immutable objects, permanent-token removal, publication/removal, and license consent records. Build and test commands are also run by GitHub Actions.
 
 See [docs/SECURITY.md](docs/SECURITY.md) for authorization, signing, and operating limits. Code dependency updates and billing monitoring are still needed; the architecture removes server administration, not all maintenance.

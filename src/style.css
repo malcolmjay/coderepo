@@ -118,6 +118,12 @@ input::file-selector-button { border:1px solid #50432b; border-radius:3px; backg
 .release-details { font-family:var(--mono); font-size:10px; color:var(--muted); margin-bottom:0; font-variant-numeric:tabular-nums; }
 .release-details span { padding:0 6px; color:#615b4e; }
 .download-button { align-self:center; min-width:122px; }
+.download-license { border-top:2px solid var(--accent); }
+.download-license h2 { font-size:20px; }
+.download-license #license-text { color:#c5beae; font-size:13px; line-height:1.75; }
+.license-checkbox { display:flex; align-items:flex-start; gap:12px; min-height:44px; padding:12px 0; cursor:pointer; font-size:13px; font-weight:550; }
+.license-checkbox input { flex:0 0 18px; width:18px; height:18px; margin:2px 0 0; padding:0; accent-color:var(--accent); cursor:pointer; }
+.download-license #license-requirement { margin:6px 0 0; }
 details { margin-top:16px; font-size:12px; }
 summary { cursor:pointer; color:var(--muted); font-size:11px; }
 summary:hover { color:var(--accent); }

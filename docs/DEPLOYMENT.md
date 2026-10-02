@@ -91,7 +91,7 @@ Use your own test mailbox and a harmless test file before adding real customers:
 
 1. Verify the magic-link email arrives and signs you in. Test a second browser/device, and confirm a consumed link cannot be reused.
 2. Add the test customer email. Sign in as that customer and confirm they cannot open admin data or directly read Firestore documents.
-3. Upload a small draft. Confirm the customer cannot see/download it before publication. Publish it and download the exact bytes through the customer portal.
+3. Upload a small draft. Confirm the customer cannot see/download it before publication. Publish it. On the customer file list, confirm the exact personal-use license is visible, the agreement checkbox starts unchecked, and all Download buttons are disabled. Check the box and download the exact bytes; uncheck it and confirm downloads are disabled again. Refresh and confirm acceptance resets. Repeat on the administrator's Test download controls. Confirm a **Download license accepted** entry appears in Admin → Activity. Calls without explicit consent or with an outdated license version must fail before a signed link is issued.
 4. Inspect the object metadata: there must be **no `firebaseStorageDownloadTokens` value** after verification. A raw Firebase object URL without authorization/token must fail.
 5. Confirm the signed download URL has a 60-second expiry and a `generation` parameter. After expiry, a new request using that URL must fail. A transfer already started may continue.
 6. Revoke the customer's email while their browser remains signed in. New download requests must fail. Restore access; the old session must still fail until the customer signs in with a new email link.
@@ -107,5 +107,6 @@ Local emulators cover the rules and callable authorization. They do **not** esta
 - Enable Firestore scheduled backups and suitable Storage recovery settings in the same project if required for your recovery needs; both may incur charges.
 - Review Firebase usage/budget alerts and monthly dependency PRs. Rebuild, run checks, and deploy updates with `npm run deploy`.
 - Firebase deploys from this checkout are explicit. GitHub Actions currently tests changes and does not deploy them automatically or require cloud credentials.
+- License wording is shared in `functions/src/download-license.ts`. Increment its version whenever wording changes, build, and deploy **both Functions and Hosting**. An older open page is asked to refresh and accept the new version. The license governs the supplied software and design files; the displayed wording explicitly permits commercial use of photographs, videos, and other media created with the camera.
 
 Official references: [email-link auth](https://firebase.google.com/docs/auth/web/email-link-auth), [Hosting configuration](https://firebase.google.com/docs/hosting/full-config), [Storage billing](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024), [signed URL permissions](https://cloud.google.com/storage/docs/access-control/signing-urls-with-helpers).

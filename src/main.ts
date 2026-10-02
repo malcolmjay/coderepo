@@ -4,6 +4,7 @@ import { connect } from "./firebase";
 import { mountCustomerImport } from "./customer-import";
 import { uploadFile } from "./file-upload";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../functions/src/upload-config.js";
+import { DOWNLOAD_LICENSE } from "../functions/src/download-license.js";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
@@ -107,15 +108,20 @@ async function loadSession() {
   catch (error) {await signOut(client.auth); login(errorMessage(error));}
 }
 
-async function download(id: string, button: HTMLButtonElement) {
-  button.disabled = true;
+async function download(id: string, isAccepted: () => boolean) {
+  if (!isAccepted()) return;
   try {
-    const {url} = await client.api<{url: string}>("download", {id});
+    const {url} = await client.api<{url: string}>("download", {id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version});
+    if (!isAccepted()) return; // The user may uncheck or leave while the link is being prepared.
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" || !(parsed.hostname === "storage.googleapis.com" || parsed.hostname.endsWith(".storage.googleapis.com"))) throw new Error("Unexpected download location");
     const link = document.createElement("a"); link.href = url; link.rel = "noreferrer"; link.referrerPolicy = "no-referrer";
     document.body.append(link); link.click(); link.remove();
-  } catch (error) {notice(errorMessage(error), true);} finally {button.disabled = false;}
+  } catch (error) {notice(errorMessage(error), true);}
+}
+
+function downloadLicensePanel() {
+  return `<section class="panel download-license" aria-labelledby="license-title"><h2 id="license-title">${esc(DOWNLOAD_LICENSE.title)}</h2><div id="license-text">${DOWNLOAD_LICENSE.paragraphs.map(paragraph => `<p>${esc(paragraph)}</p>`).join("")}</div><label class="license-checkbox" for="download-license"><input id="download-license" type="checkbox" required aria-describedby="license-text"><span>${esc(DOWNLOAD_LICENSE.agreement)}</span></label><p id="license-requirement" class="fine" aria-live="polite">Agree to the license above to enable downloads.</p></section>`;
 }
 
 function releaseCard(release: Release, latest: boolean, admin: boolean) {
@@ -128,7 +134,21 @@ async function releasesPage(admin: boolean, token: number) {
   currentReleases = first.items;
   main.innerHTML = heading(admin ? "Manage files." : "Your downloads.", admin ? "Upload a release, check the details, then publish it for your customers." : "Updates, printable parts, and a little more possibility.", admin)
     + (admin ? adminNav("releases") + `<section class="panel"><div class="row"><div><h2>New release</h2><p>Files stay private until you publish them.</p></div><button id="new-release" class="button">Upload a file</button></div><div id="editor"></div></section>` : "")
+    + downloadLicensePanel()
     + `<div class="filters" role="search"><label class="sr-only" for="search">Search downloads</label><input id="search" type="search" placeholder="Search by camera, sensor, or release…"><label class="sr-only" for="category">File category</label><select id="category">${options("", true)}</select></div><div class="section-label"><span>AVAILABLE FILES</span><span id="count"></span></div><div id="release-list"></div><button class="button secondary load-more" id="more" ${first.next ? "" : "hidden"}>Load more files</button><aside class="download-note"><strong>Before you update</strong><p>Check camera and sensor compatibility, follow the release instructions, and back up your photos and settings first.</p></aside>`;
+  const consent = main.querySelector<HTMLInputElement>("#download-license")!;
+  const releaseList = main.querySelector<HTMLElement>("#release-list")!;
+  const requirement = main.querySelector<HTMLElement>("#license-requirement")!;
+  const downloading = new Set<string>();
+  const isAccepted = () => consent.isConnected && consent.checked;
+  const updateDownloadButtons = () => {
+    releaseList.querySelectorAll<HTMLButtonElement>("button[data-download]").forEach(button => {
+      button.disabled = !isAccepted() || downloading.has(button.dataset.download!);
+      button.setAttribute("aria-describedby", "license-requirement");
+    });
+    requirement.textContent = consent.checked ? "License accepted. You can now download files." : "Agree to the license above to enable downloads.";
+  };
+  consent.addEventListener("change", updateDownloadButtons);
   const draw = () => {
     const query = document.querySelector<HTMLInputElement>("#search")!.value.toLowerCase();
     const category = document.querySelector<HTMLSelectElement>("#category")!.value;
@@ -142,6 +162,7 @@ async function releasesPage(admin: boolean, token: number) {
     const filtered = currentReleases.filter(r => (!category || r.kind === category) && `${r.title} ${r.compatibility} ${r.version} ${r.notes}`.toLowerCase().includes(query));
     document.querySelector("#count")!.textContent = `${filtered.length} of ${currentReleases.length} loaded`;
     document.querySelector("#release-list")!.innerHTML = filtered.map(r => releaseCard(r, latestIds.has(r.id), admin)).join("") || `<div class="empty"><span class="empty-icon" aria-hidden="true">↓</span><h2>${query || category ? "No matching files." : "Files are on their way."}</h2><p>${query || category ? "Try another search, or load more releases below." : "Published firmware and 3D files will appear here."}</p></div>`;
+    updateDownloadButtons();
   };
   draw();
   document.querySelector("#search")!.addEventListener("input", draw);
@@ -155,7 +176,13 @@ async function releasesPage(admin: boolean, token: number) {
   document.querySelector("#new-release")?.addEventListener("click", () => editor());
   document.querySelector("#release-list")!.addEventListener("click", async event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button"); if (!button) return;
-    if (button.dataset.download) {void download(button.dataset.download, button); return;}
+    if (button.dataset.download) {
+      const id = button.dataset.download;
+      if (!isAccepted() || downloading.has(id)) return;
+      downloading.add(id); updateDownloadButtons();
+      try {await download(id, isAccepted);} finally {downloading.delete(id); updateDownloadButtons();}
+      return;
+    }
     if (button.dataset.edit) {editor(currentReleases.find(r => r.id === button.dataset.edit)); return;}
     if (button.dataset.delete && !confirm("Permanently remove this draft and its file?")) return;
     button.disabled = true;
