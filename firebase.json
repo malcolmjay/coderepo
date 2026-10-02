@@ -1,6 +1,6 @@
 {
   "functions": [{"source": "functions", "codebase": "portal", "ignore": ["node_modules", ".git", "*-debug.log*", ".env.local"], "predeploy": ["npm --prefix functions run build"]}],
-  "firestore": {"rules": "firestore.rules", "indexes": "firestore.indexes.json"},
+  "firestore": {"database": "(default)", "location": "northamerica-northeast1", "edition": "standard", "rules": "firestore.rules", "indexes": "firestore.indexes.json"},
   "storage": {"rules": "storage.rules"},
   "hosting": {
     "public": "dist",

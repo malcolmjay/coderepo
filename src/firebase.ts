@@ -16,7 +16,7 @@ async function configuration(): Promise<FirebaseOptions> {
 export async function connect() {
   const app = initializeApp(await configuration());
   const auth = getAuth(app);
-  const functions = getFunctions(app, "us-central1");
+  const functions = getFunctions(app, "northamerica-northeast1");
   const storage = getStorage(app);
   if (emulated) {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", {disableWarnings: true});

@@ -7,8 +7,8 @@ Everything below belongs to the same Firebase / Google Cloud project. There is n
 1. Create a project in [Firebase Console](https://console.firebase.google.com/). Google Analytics is optional and is not used by this portal.
 2. Link a billing account and use the **Blaze** plan. Cloud Storage and Cloud Functions require billing. Configure billing budget alerts; alerts are not a hard spending cap. Download bandwidth will usually matter more than customer database size.
 3. Register a **Web app** in the project. You do not need to copy its public configuration into the repository: production fetches `/__/firebase/init.json` from Firebase Hosting.
-4. Create a Cloud Firestore database named **`(default)`**, in production mode. Create the default Cloud Storage bucket with private access rules. Use the actual bucket name displayed in the console (new buckets commonly end in `.firebasestorage.app`). Do not enable public access.
-5. Choose database/bucket locations before creating them. The supplied Function runs in `us-central1`. Using the same US region keeps the starter configuration simple; this is not a Canada-only data-residency configuration. To move compute to Montreal, change `us-central1` in both `functions/src/index.ts` and `src/firebase.ts` before deploying, and adjust the commands below.
+4. Create a **Standard edition** Cloud Firestore database named **`(default)`**, in production mode, in **Montréal (`northamerica-northeast1`)**. Create the default Cloud Storage bucket in the same region with private access rules. Use the actual bucket name displayed in the console (new buckets commonly end in `.firebasestorage.app`). Do not enable public access.
+5. The app's Function, browser client, and Firestore deployment configuration use **Montréal (`northamerica-northeast1`)**, as selected for this project. Choose this location when creating the bucket too; changing these settings later does not relocate an existing database or bucket. Firebase Hosting uses a global CDN, and [Firebase Authentication processes data in the United States](https://firebase.google.com/support/privacy#data_storage_and_processing_locations), so this is not a guarantee that every Firebase service stores and processes data only in Canada.
 
 ## 2. Enable passwordless email sign-in
 
@@ -30,12 +30,13 @@ On a trusted workstation, install Node.js 22 and the [Google Cloud CLI](https://
 ```bash
 npm ci
 npm --prefix functions ci
-npx firebase login
-npx firebase use --add
-npm run deploy
+npx -y firebase-tools@latest login
+npx -y firebase-tools@latest use --add
+npm run build
+npx -y firebase-tools@latest deploy --only firestore,storage,functions,hosting
 ```
 
-Select the new project for the default alias. `.firebaserc` is local and ignored by git. The deploy publishes Hosting, the callable Function, Firestore rules/indexes, and Storage rules. The Firebase CLI will request enabling necessary Google APIs and may request an Artifact Registry cleanup policy; a short retention period avoids storing old build images indefinitely.
+Select the new project for the default alias. `.firebaserc` is local and ignored by git. In a pre-authenticated Google Cloud Shell, skip `login` and use `--project camera-hacks` on Firebase commands instead of selecting a local alias. The deploy publishes Hosting, the callable Function, Firestore rules/indexes, and Storage rules. The Firebase CLI will request enabling necessary Google APIs and may request an Artifact Registry cleanup policy; a short retention period avoids storing old build images indefinitely.
 
 **Accept the Storage-to-Firestore rules permission when prompted.** Storage upload rules read two documents from Firestore: the administrator membership and the draft release. The Storage service agent needs the Firebase-provided cross-service rules permission for this to work. If the prompt is missed, redeploy Storage rules and follow [Firebase's cross-service rules instructions](https://firebase.google.com/docs/storage/security/rules-conditions#enhance_with_firestore).
 
@@ -50,7 +51,7 @@ gcloud auth login
 export PORTAL_PROJECT='YOUR_PROJECT_ID'
 export PORTAL_BUCKET='YOUR_ACTUAL_BUCKET_NAME'
 gcloud services enable iamcredentials.googleapis.com --project="$PORTAL_PROJECT"
-export PORTAL_RUNTIME="$(gcloud functions describe portal --gen2 --region=us-central1 --project="$PORTAL_PROJECT" --format='value(serviceConfig.serviceAccountEmail)')"
+export PORTAL_RUNTIME="$(gcloud functions describe portal --gen2 --region=northamerica-northeast1 --project="$PORTAL_PROJECT" --format='value(serviceConfig.serviceAccountEmail)')"
 
 # Read/write the portal's own database.
 gcloud projects add-iam-policy-binding "$PORTAL_PROJECT" \

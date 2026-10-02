@@ -35,7 +35,7 @@ async function login(address) {
   return {token: result.idToken, uid: result.localId, email: address, oobCode: code.oobCode};
 }
 async function call(user, operation, data = {}) {
-  const response = await json(`http://127.0.0.1:5001/${projectId}/us-central1/portal`, {data: {operation, ...data}}, user ? {authorization: `Bearer ${user.token}`} : {});
+  const response = await json(`http://127.0.0.1:5001/${projectId}/northamerica-northeast1/portal`, {data: {operation, ...data}}, user ? {authorization: `Bearer ${user.token}`} : {});
   if (response.error) {const error = new Error(response.error.message); error.code = response.error.status; throw error;}
   return response.result;
 }

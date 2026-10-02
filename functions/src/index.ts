@@ -6,7 +6,7 @@ import { dispatch } from "./service.js";
 import { PortalError } from "./domain.js";
 
 initializeApp();
-setGlobalOptions({region: "us-central1", maxInstances: 5, memory: "256MiB", timeoutSeconds: 60});
+setGlobalOptions({region: "northamerica-northeast1", maxInstances: 5, memory: "256MiB", timeoutSeconds: 60});
 
 export const portal = onCall(async request => {
   try {
