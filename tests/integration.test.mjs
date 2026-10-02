@@ -92,6 +92,20 @@ test('draft metadata stays hidden and incomplete files cannot be published', asy
   await denied(call(owner, 'publish', {id: release.id, published: true}), 'FAILED_PRECONDITION');
   await denied(call(customer, 'download', {id: release.id}), 'NOT_FOUND');
 });
+test('large disk-image drafts preserve 64-bit sizes and enforce the upload cap', async () => {
+  for (const size of [11_000_000_000, 11 * 1024 ** 3, 20 * 1024 ** 3]) {
+    const draft = await call(owner, 'beginUpload', {...fields, size, filename: 'WLV-01.img'});
+    const record = (await db.doc(`releases/${draft.id}`).get()).data();
+    assert.equal(record.size, size);
+    assert.equal(record.status, 'uploading');
+    assert.equal(record.published, false);
+    await denied(call(owner, 'publish', {id: draft.id, published: true}), 'FAILED_PRECONDITION');
+    await denied(call(customer, 'download', {id: draft.id}), 'NOT_FOUND');
+    await call(owner, 'deleteDraft', {id: draft.id});
+  }
+  await denied(call(owner, 'beginUpload', {...fields, size: 20 * 1024 ** 3 + 1, filename: 'too-large.img'}), 'INVALID_ARGUMENT');
+  await denied(call(customer, 'beginUpload', {...fields, size: 11 * 1024 ** 3, filename: 'unauthorized.img'}));
+});
 test('storage enforces administrator role, active membership, and declared upload size', async () => {
   const metadata = {contentType: 'application/octet-stream', cacheControl: 'private, no-store'};
   await assertFails(uploadBytes(ref(storage(customer), release.storagePath), new Uint8Array(4), metadata));

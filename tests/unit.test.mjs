@@ -34,8 +34,8 @@ test('release validation rejects invalid categories, checksums, IDs and file siz
   assert.throws(() => releaseFields({...fields, kind: 'script'}));
   assert.throws(() => releaseFields({...fields, sha256: 'bad'}));
   assert.throws(() => releaseId('../../private'));
-  for (const size of [0, -1, '1', 1.2, 5 * 1024 ** 3 + 1]) assert.throws(() => uploadSize(size));
-  assert.equal(uploadSize(5 * 1024 ** 3), 5 * 1024 ** 3);
+  for (const size of [0, -1, '1', 1.2, NaN, Infinity, Number.MAX_SAFE_INTEGER, 20 * 1024 ** 3 + 1]) assert.throws(() => uploadSize(size));
+  for (const size of [1, 11_000_000_000, 11 * 1024 ** 3, 20 * 1024 ** 3]) assert.equal(uploadSize(size), size);
   assert(!/[\r\n"/\\]/.test(filename('../../evil"\r\n.zip')));
 });
 test('publication fields cannot be smuggled into an ordinary metadata edit', () => {

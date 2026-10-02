@@ -310,6 +310,7 @@ td .link-button { color:var(--accent); font-size:11px; text-decoration:underline
 .load-more { display:block; margin:26px auto; }
 progress { display:block; width:100%; accent-color:var(--accent); height:10px; margin-top:16px; }
 #upload-status { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.upload-controls { flex-wrap:wrap; gap:12px; }
 #upload-status.error { color:var(--danger); }
 .import-panel fieldset { border:0; padding:0; margin:0; min-width:0; }
 .import-panel > .row { margin-bottom:12px; }

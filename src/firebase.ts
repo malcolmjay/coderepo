@@ -2,6 +2,7 @@ import { initializeApp, type FirebaseOptions } from "firebase/app";
 import { browserSessionPersistence, connectAuthEmulator, getAuth, setPersistence } from "firebase/auth";
 import { connectFunctionsEmulator, getFunctions, httpsCallable } from "firebase/functions";
 import { connectStorageEmulator, getStorage } from "firebase/storage";
+import { VERIFICATION_TIMEOUT_SECONDS } from "../functions/src/upload-config.js";
 
 const emulated = import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === "true";
 async function configuration(): Promise<FirebaseOptions> {
@@ -18,6 +19,8 @@ export async function connect() {
   const auth = getAuth(app);
   const functions = getFunctions(app, "northamerica-northeast1");
   const storage = getStorage(app);
+  // Retry temporary connection failures; this is not a total-upload deadline.
+  storage.maxUploadRetryTime = 30 * 60 * 1000;
   if (emulated) {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", {disableWarnings: true});
     connectFunctionsEmulator(functions, "127.0.0.1", 5001);
@@ -25,5 +28,6 @@ export async function connect() {
   }
   await setPersistence(auth, browserSessionPersistence);
   const call = httpsCallable<Record<string, unknown>, unknown>(functions, "portal");
-  return {auth, storage, api: async <T>(operation: string, data: Record<string, unknown> = {}): Promise<T> => (await call({operation, ...data})).data as T};
+  const verify = httpsCallable<Record<string, unknown>, unknown>(functions, "portal", {timeout: (VERIFICATION_TIMEOUT_SECONDS + 60) * 1000});
+  return {auth, storage, api: async <T>(operation: string, data: Record<string, unknown> = {}): Promise<T> => (await (operation === "completeUpload" ? verify : call)({operation, ...data})).data as T};
 }

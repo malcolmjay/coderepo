@@ -9,7 +9,7 @@ The application now runs entirely within **one Firebase project**: Hosting, Auth
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
 - Admin pages to import up to 10,000 customer emails from CSV or a pasted list, review invalid rows and duplicates, record purchase sources, revoke/restore access, and view an activity log.
-- Direct resumable browser uploads up to 5 GiB, draft review, metadata editing, publication/unpublication, and draft removal.
+- Direct resumable browser uploads up to 20 GiB, including raw `.img` disk images, with in-page pause/resume and byte progress, draft review, metadata editing, publication/unpublication, and draft removal.
 - Server-enforced customer and administrator authorization. Every download request checks current access and publication state.
 - Private, immutable file objects with generation-pinned download URLs that expire after 60 seconds. Permanent Firebase download tokens are removed during upload verification.
 - Firebase emulator integration tests, TypeScript builds, GitHub Actions, and monthly dependency update PRs.

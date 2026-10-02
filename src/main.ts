@@ -1,8 +1,9 @@
 import "./style.css";
 import { isSignInWithEmailLink, onAuthStateChanged, sendSignInLinkToEmail, signInWithEmailLink, signOut } from "firebase/auth";
-import { ref, uploadBytesResumable } from "firebase/storage";
 import { connect } from "./firebase";
 import { mountCustomerImport } from "./customer-import";
+import { uploadFile } from "./file-upload";
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../functions/src/upload-config.js";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
@@ -31,6 +32,8 @@ function errorMessage(error: unknown) {
   if (e.code === "auth/invalid-email") return "Enter a valid email address.";
   if (e.code === "auth/network-request-failed" || e.code === "functions/unavailable") return "Could not connect. Check your connection and try again.";
   if (e.code === "storage/unauthorized") return "This upload is no longer authorized. Sign in again or remove the unfinished draft and retry.";
+  if (e.code === "storage/canceled") return "Upload canceled.";
+  if (e.code === "storage/retry-limit-exceeded") return "The connection did not recover. Check your connection and start a new upload.";
   if (e.code?.startsWith("functions/")) return e.message || "Please try again.";
   return "Something went wrong. Please try again or contact Camera Hacks.";
 }
@@ -168,7 +171,7 @@ async function releasesPage(admin: boolean, token: number) {
 function editor(release?: Release) {
   if (uploading) return;
   const host = document.querySelector<HTMLElement>("#editor")!;
-  host.innerHTML = `<form id="release-form" class="stack release-form"><div class="form-grid"><p><label for="title">Release title</label><input id="title" name="title" maxlength="120" value="${esc(release?.title)}" placeholder="WLV-01 camera software" required></p><p><label for="version">Version</label><input id="version" name="version" maxlength="40" value="${esc(release?.version)}" placeholder="3.2.0" required></p><p><label for="kind">Category</label><select id="kind" name="kind">${options(release?.kind || "firmware")}</select></p><p><label for="compatibility">Compatible cameras / sensors</label><input id="compatibility" name="compatibility" maxlength="200" value="${esc(release?.compatibility)}" placeholder="WLV-01 · IMX294" required></p></div><p><label for="notes">Release notes & installation instructions</label><textarea id="notes" name="notes" maxlength="10000" rows="5">${esc(release?.notes)}</textarea></p><p><label for="sha256">SHA-256 checksum (optional)</label><input id="sha256" name="sha256" maxlength="64" pattern="[a-fA-F0-9]{64}" value="${esc(release?.sha256)}"><span class="helptext">Use the checksum generated from your original release file.</span></p>${!release ? '<p><label for="file">Release file</label><input id="file" name="file" type="file" required><span class="helptext">Up to 5 GiB. Keep this page open while the file uploads.</span></p>' : `<p class="fine">${esc(release.filename)} · Upload a new release to replace the file.</p>`}<progress id="progress" max="100" value="0" hidden aria-label="File upload progress"></progress><p id="upload-status" role="status"></p><div class="actions"><button class="button" type="submit">${release ? "Save details" : "Upload as draft"}</button><button class="button secondary" type="button" id="cancel-editor">Cancel</button></div></form>`;
+  host.innerHTML = `<form id="release-form" class="stack release-form"><div class="form-grid"><p><label for="title">Release title</label><input id="title" name="title" maxlength="120" value="${esc(release?.title)}" placeholder="WLV-01 camera software" required></p><p><label for="version">Version</label><input id="version" name="version" maxlength="40" value="${esc(release?.version)}" placeholder="3.2.0" required></p><p><label for="kind">Category</label><select id="kind" name="kind">${options(release?.kind || "firmware")}</select></p><p><label for="compatibility">Compatible cameras / sensors</label><input id="compatibility" name="compatibility" maxlength="200" value="${esc(release?.compatibility)}" placeholder="WLV-01 · IMX294" required></p></div><p><label for="notes">Release notes & installation instructions</label><textarea id="notes" name="notes" maxlength="10000" rows="5">${esc(release?.notes)}</textarea></p><p><label for="sha256">SHA-256 checksum (optional)</label><input id="sha256" name="sha256" maxlength="64" pattern="[a-fA-F0-9]{64}" value="${esc(release?.sha256)}"><span class="helptext">Use the checksum generated from your original release file.</span></p>${!release ? '<p><label for="file">Release file</label><input id="file" name="file" type="file" required><span class="helptext">Up to ' + MAX_UPLOAD_LABEL + '. Raw .img files are supported. Keep this tab open and your computer awake. You can pause and resume here; closing the tab requires a new upload.</span></p>' : `<p class="fine">${esc(release.filename)} · Upload a new release to replace the file.</p>`}<progress id="progress" max="100" value="0" hidden aria-label="File upload progress"></progress><p id="upload-status" role="status"></p><div id="upload-controls" class="actions upload-controls" hidden><button class="button secondary" type="button" id="pause-upload">Pause upload</button><button class="button secondary" type="button" id="cancel-upload">Cancel upload</button></div><div class="actions"><button class="button" type="submit">${release ? "Save details" : "Upload as draft"}</button><button class="button secondary" type="button" id="cancel-editor">Cancel</button></div></form>`;
   host.scrollIntoView({block: "start", behavior: "smooth"});
   document.querySelector("#cancel-editor")!.addEventListener("click", () => {if (!uploading) host.innerHTML = "";});
   document.querySelector<HTMLFormElement>("#release-form")!.addEventListener("submit", async event => {
@@ -179,22 +182,23 @@ function editor(release?: Release) {
       if (release) await client.api("saveRelease", {id: release.id, ...fields});
       else {
         const file = data.get("file") as File;
-        if (!file.size || file.size > 5 * 1024 ** 3) {notice("Choose a file between 1 byte and 5 GiB.", true); return;}
+        if (!file.size || file.size > MAX_UPLOAD_BYTES) {notice(`Choose a file between 1 byte and ${MAX_UPLOAD_LABEL}.`, true); return;}
         uploading = true;
+        form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select").forEach(field => {field.disabled = true;});
         const {id, storagePath} = await client.api<{id: string; storagePath: string}>("beginUpload", {...fields, size: file.size, filename: file.name});
-        const progress = document.querySelector<HTMLProgressElement>("#progress")!; progress.hidden = false;
-        const status = document.querySelector<HTMLElement>("#upload-status")!;
-        const task = uploadBytesResumable(ref(client.storage, storagePath), file, {contentType: "application/octet-stream", cacheControl: "private, no-store"});
-        await new Promise<void>((resolve, reject) => task.on("state_changed", snapshot => {
-          progress.value = Math.round(snapshot.bytesTransferred / snapshot.totalBytes * 100);
-          status.textContent = `Uploading… ${progress.value}%`;
-        }, reject, () => resolve()));
-        status.textContent = "Upload complete. Verifying the file…";
+        await uploadFile(client.storage, storagePath, file, form);
+        const status = form.querySelector<HTMLElement>("#upload-status")!;
+        status.textContent = "Upload complete. Verifying the file… Large files may take a few minutes.";
         await client.api("completeUpload", {id});
       }
       uploading = false; await route(); notice(release ? "Release details saved." : "File uploaded as a draft. Review it, then publish when ready.");
-    } catch (error) {notice(`${errorMessage(error)}${!release ? " An unfinished draft can be verified or removed in Manage files." : ""}`, true);}
-    finally {uploading = false; busy(form, false);}
+    } catch (error) {
+      if (uploading) {uploading = false; await route();}
+      notice(`${errorMessage(error)}${!release ? " An unfinished draft can be verified or removed in Manage files." : ""}`, true);
+    } finally {
+      uploading = false; busy(form, false);
+      form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select").forEach(field => {field.disabled = false;});
+    }
   });
 }
 
@@ -272,9 +276,11 @@ async function route() {
 }
 
 document.addEventListener("click", event => {
+  if (uploading && (event.target as Element).closest(".header a, #nav button, .admin-nav a")) {event.preventDefault(); event.stopImmediatePropagation();}
   if (importing && (event.target as Element).closest(".header a, #nav button, .admin-nav a, #customers button, #more")) {event.preventDefault(); event.stopImmediatePropagation();}
 }, true);
 window.addEventListener("hashchange", () => {
+  if (uploading) {history.replaceState(null, "", "#releases"); return;}
   if (importing) {history.replaceState(null, "", "#customers"); return;}
   void route();
 });

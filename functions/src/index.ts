@@ -4,9 +4,10 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { logger } from "firebase-functions";
 import { dispatch } from "./service.js";
 import { PortalError } from "./domain.js";
+import { VERIFICATION_TIMEOUT_SECONDS } from "./upload-config.js";
 
 initializeApp();
-setGlobalOptions({region: "northamerica-northeast1", maxInstances: 5, memory: "256MiB", timeoutSeconds: 60});
+setGlobalOptions({region: "northamerica-northeast1", maxInstances: 5, memory: "256MiB", timeoutSeconds: VERIFICATION_TIMEOUT_SECONDS});
 
 export const portal = onCall(async request => {
   try {

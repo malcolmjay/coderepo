@@ -15,7 +15,7 @@ service firebase.storage {
         && firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.uploadedBy == request.auth.uid
         && firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.status == 'uploading'
         && request.resource.size == firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.size
-        && request.resource.size > 0 && request.resource.size <= 5368709120
+        && request.resource.size > 0 && request.resource.size <= 21474836480
         && request.resource.contentType == 'application/octet-stream';
     }
     match /{path=**} { allow read, write: if false; }

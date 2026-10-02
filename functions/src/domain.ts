@@ -1,4 +1,4 @@
-export const MAX_BYTES = 5 * 1024 ** 3;
+import {MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL} from "./upload-config.js";
 export const CATEGORIES = ["firmware", "software", "models", "guide"] as const;
 
 export class PortalError extends Error {
@@ -67,6 +67,6 @@ export function bulkEmails(value: unknown): string[] {
 }
 
 export function uploadSize(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > MAX_BYTES) throw new PortalError("invalid-argument", "Choose a file between 1 byte and 5 GiB.");
+  if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > MAX_UPLOAD_BYTES) throw new PortalError("invalid-argument", `Choose a file between 1 byte and ${MAX_UPLOAD_LABEL}.`);
   return value as number;
 }
