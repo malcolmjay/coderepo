@@ -1,0 +1,16 @@
+node_modules/
+functions/lib/
+dist/
+.firebase/
+.firebaserc
+.env*
+!.env.example
+*-debug.log*
+*service-account*.json
+*credentials*.json
+__pycache__/
+*.sqlite3
+.ruff_cache/
+staticfiles/
+playwright-report/
+test-results/
