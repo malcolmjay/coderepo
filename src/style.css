@@ -46,6 +46,7 @@ h2 { font-size:23px; }
 .portal-status span { display:block; color:var(--ink); }
 .portal-status .status-dot { width:5px; height:5px; margin-right:7px; }
 .header nav { min-height:57px; display:flex; align-items:stretch; gap:29px; margin-top:10px; font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; }
+.header nav a,.header nav .link-button { display:inline-flex; align-items:center; }
 .header nav .link-button { color:var(--muted); font-size:inherit; font-weight:inherit; letter-spacing:inherit; text-transform:inherit; border-bottom:2px solid transparent; padding:14px 0; }
 .header nav .link-button:hover { color:var(--ink); }
 .header nav .link-button[aria-current] { color:var(--ink); border-bottom-color:var(--accent); }
