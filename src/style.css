@@ -155,6 +155,12 @@ summary:hover { color:var(--accent-text); }
 .release-actions { margin-top:18px; flex-wrap:wrap; }
 .release-actions button { color:var(--accent-text); text-decoration:underline; text-underline-offset:4px; min-height:32px; }
 .release-actions .danger { color:var(--danger); }
+.community-intro { margin-bottom:28px; }
+.community-intro .row > div { max-width:710px; }
+.community-intro .row > .button { flex-shrink:0; }
+.community-intro .eyebrow { margin-bottom:10px; }
+.community-author { color:var(--accent-text); font-size:13px; margin-bottom:10px; overflow-wrap:anywhere; }
+.community-card .release-actions .fine { flex-basis:100%; overflow-wrap:anywhere; }
 .download-note { margin:30px 0; padding:22px 24px; border-left:2px solid var(--accent); background:var(--surface); }
 .download-note strong { font-size:14px; font-weight:700; }
 .download-note p { color:var(--muted); font-size:13px; margin:6px 0 0; }
@@ -223,7 +229,9 @@ progress { display:block; width:100%; accent-color:var(--accent); height:10px; m
 .skip-link:focus { position:fixed; z-index:110; top:10px; left:10px; width:auto; height:auto; clip:auto; padding:12px; margin:0; background:var(--accent); color:#0b0c0b; }
 
 @media(max-width:960px) {
-  .header-top { gap:24px; }
+  .header-top { display:grid; grid-template-columns:1fr auto; gap:18px 24px; padding-block:22px 0; }
+  .shop-link { grid-column:2; grid-row:1; }
+  .header nav { grid-column:1/-1; grid-row:2; }
   .header nav { gap:26px; }
   .login-layout { gap:36px; }
   .login-panel { padding:28px; }
@@ -239,8 +247,9 @@ progress { display:block; width:100%; accent-color:var(--accent); height:10px; m
   .header-top { display:grid; grid-template-columns:1fr auto; gap:18px 20px; padding-block:22px 0; }
   .brand { font-size:29px; }
   .shop-link { grid-column:2; grid-row:1; gap:14px; font-size:12px; }
-  .header nav { grid-column:1/-1; grid-row:2; gap:32px; min-height:62px; }
-  .header nav a,.header nav .link-button { min-height:62px; padding-block:8px 12px; }
+  .header nav { grid-column:1/-1; grid-row:2; gap:14px; justify-content:space-between; min-height:72px; }
+  .header nav a,.header nav .link-button { min-height:72px; padding-block:8px 12px; justify-content:flex-start; white-space:normal; font-size:12px; }
+  .header nav a[href="#community"] { max-width:90px; }
   .header-label { min-height:44px; }
   .portal-register { padding-block:12px; gap:18px; font-size:8px; }
   .portal-register > span:last-child { display:none; }
@@ -297,7 +306,7 @@ progress { display:block; width:100%; accent-color:var(--accent); height:10px; m
   .footer a { margin-left:auto; }
 }
 @media(max-width:380px) {
-  .header nav { gap:26px; }
+  .header nav { gap:12px; }
   .portal-register { font-size:7px; gap:12px; }
   .login-panel,.panel,.verify-panel { padding:20px; }
   .login-intro h1 { font-size:46px; }

@@ -2,6 +2,12 @@
   "indexes": [{"collectionGroup": "releases", "queryScope": "COLLECTION", "fields": [
     {"fieldPath": "published", "order": "ASCENDING"},
     {"fieldPath": "publishedAt", "order": "DESCENDING"}
+  ]}, {"collectionGroup": "communityBuilds", "queryScope": "COLLECTION", "fields": [
+    {"fieldPath": "published", "order": "ASCENDING"},
+    {"fieldPath": "publishedAt", "order": "DESCENDING"}
+  ]}, {"collectionGroup": "communityBuilds", "queryScope": "COLLECTION", "fields": [
+    {"fieldPath": "uploadedBy", "order": "ASCENDING"},
+    {"fieldPath": "createdAt", "order": "DESCENDING"}
   ]}],
   "fieldOverrides": []
 }

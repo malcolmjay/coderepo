@@ -196,3 +196,167 @@ test('unpublishing blocks download requests and draft removal deletes the object
   const [exists] = await getAdminStorage(admin).bucket().file(`releases/${release.id}/payload`).exists(); assert.equal(exists, false);
   assert((await call(owner, 'activity')).items.some(item => item.action === 'Draft removed'));
 });
+
+// Community fixtures use the same real email-link/callable/Storage emulators.
+const buildFields = {title: 'Compact viewfinder', authorName: 'Camera Builder', version: '1.0', kind: 'models', compatibility: 'WLV-01', notes: 'Print with the opening facing up.'};
+const sharing = {sharingAccepted: true, sharingVersion: '2026-10-07'};
+const binary = {contentType: 'application/octet-stream', cacheControl: 'private, no-store'};
+let otherCustomer;
+let community;
+let replacement;
+
+test('community requires current customer access and keeps management views private', async () => {
+  otherCustomer = await login('new@example.com');
+  for (const operation of ['communityBuilds', 'beginCommunityUpload', 'completeCommunityUpload', 'cancelCommunityUpload', 'saveCommunityBuild', 'publishCommunityBuild', 'deleteCommunityBuild', 'downloadCommunityBuild']) {
+    await denied(call(stranger, operation, {role: 'admin'}));
+    await denied(call(revoked, operation));
+    await denied(call(null, operation), 'UNAUTHENTICATED');
+  }
+  await denied(call(customer, 'communityBuilds', {scope: 'manage', role: 'admin'}));
+  assert.deepEqual((await call(customer, 'communityBuilds')).items, []);
+});
+test('community drafts require sharing consent and take ownership only from authenticated identity', async () => {
+  const data = {...buildFields, filename: 'viewfinder.stl', size: 4};
+  for (const consent of [{}, {...sharing, sharingAccepted: 'true'}, {...sharing, sharingVersion: 'old'}]) {
+    await denied(call(customer, 'beginCommunityUpload', {...data, ...consent}), 'FAILED_PRECONDITION');
+  }
+  await denied(call(customer, 'beginCommunityUpload', {...data, ...sharing, size: 1024 ** 3 + 1}), 'INVALID_ARGUMENT');
+  community = await call(customer, 'beginCommunityUpload', {...data, ...sharing, uploadedBy: owner.uid, role: 'admin', published: true});
+  const record = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.equal(record.uploadedBy, customer.uid); assert.equal(record.pending.uploadedBy, customer.uid); assert.equal(record.published, false);
+  assert.equal((await call(customer, 'communityBuilds', {scope: 'mine'})).items[0].canManage, true);
+  assert.equal((await call(otherCustomer, 'communityBuilds')).items.length, 0);
+  assert.equal((await call(otherCustomer, 'communityBuilds', {scope: 'mine'})).items.length, 0);
+  assert.equal((await call(owner, 'communityBuilds', {scope: 'manage'})).items[0].id, community.id);
+  await denied(call(otherCustomer, 'communityBuilds', {scope: 'mine', cursor: community.id}), 'INVALID_ARGUMENT');
+  await denied(call(customer, 'publishCommunityBuild', {id: community.id, published: true}), 'FAILED_PRECONDITION');
+});
+test('community storage requires a declared upload owned by the active uploader', async () => {
+  for (const user of [otherCustomer, owner, stranger, revoked]) await assertFails(uploadBytes(ref(storage(user), community.storagePath), new Uint8Array(4), binary));
+  await assertFails(uploadBytes(ref(storage(customer, {email_verified: false}), community.storagePath), new Uint8Array(4), binary));
+  await assertFails(uploadBytes(ref(storage(customer), community.storagePath), new Uint8Array(3), binary));
+  await assertFails(uploadBytes(ref(storage(customer), community.storagePath), new Uint8Array(4), {...binary, contentType: 'text/html'}));
+  await assertFails(uploadBytes(ref(storage(customer), `community-files/${community.id}/${community.uploadId}/payload`), new Uint8Array(4), binary));
+  await assertFails(uploadBytes(ref(storage(customer), `community-uploads/${community.id}/${'f'.repeat(32)}/payload`), new Uint8Array(4), binary));
+  await assertSucceeds(uploadBytes(ref(storage(customer), community.storagePath), new Uint8Array([1, 2, 3, 4]), binary));
+  for (const user of [customer, otherCustomer, owner]) {
+    const file = ref(storage(user), community.storagePath);
+    await assertFails(uploadBytes(file, new Uint8Array(4), binary));
+    await assertFails(getMetadata(file)); await assertFails(getBytes(file));
+    await assertFails(updateMetadata(file, {customMetadata: {firebaseStorageDownloadTokens: 'forged'}}));
+    await assertFails(deleteObject(file));
+  }
+});
+test('other customers cannot edit, replace, verify, publish, discard or delete a build', async () => {
+  const data = {...buildFields, ...sharing, id: community.id, uploadId: community.uploadId, filename: 'other.zip', size: 4, published: true, uploadedBy: otherCustomer.uid, role: 'admin'};
+  for (const operation of ['saveCommunityBuild', 'beginCommunityUpload', 'completeCommunityUpload', 'publishCommunityBuild', 'cancelCommunityUpload', 'deleteCommunityBuild']) {
+    await denied(call(otherCustomer, operation, data));
+  }
+  const context = env.authenticatedContext(otherCustomer.uid, {email: otherCustomer.email, email_verified: true, role: 'admin'});
+  await assertFails(getDoc(doc(context.firestore(), 'communityBuilds', community.id)));
+  await assertFails(setDoc(doc(context.firestore(), 'communityBuilds', community.id), {uploadedBy: otherCustomer.uid, published: true}));
+});
+test('community verification strips permanent tokens and requires an explicit publish step', async () => {
+  await call(customer, 'completeCommunityUpload', {id: community.id, uploadId: community.uploadId});
+  await call(customer, 'completeCommunityUpload', {id: community.id, uploadId: community.uploadId});
+  const record = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.equal(record.status, 'ready'); assert.equal(record.pending, null); assert.equal(record.published, false);
+  const [metadata] = await getAdminStorage(admin).bucket().file(record.file.storagePath).getMetadata();
+  assert(!metadata.metadata?.firebaseStorageDownloadTokens); assert.equal(metadata.cacheControl, 'private, no-store');
+  assert.equal((await getAdminStorage(admin).bucket().file(community.storagePath).exists())[0], false);
+  await denied(call(otherCustomer, 'downloadCommunityBuild', {id: community.id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version}), 'NOT_FOUND');
+  await call(customer, 'publishCommunityBuild', {id: community.id, published: true});
+  const item = (await call(otherCustomer, 'communityBuilds')).items[0];
+  assert.equal(item.canManage, false); assert.equal(item.pending, null); assert.equal(item.authorName, buildFields.authorName);
+  for (const key of ['uploadedBy', 'email', 'storagePath', 'file', 'generation', 'retiredPaths']) assert.equal(item[key], undefined);
+  for (const user of [customer, owner]) assert.equal((await call(user, 'communityBuilds')).items[0].canManage, true);
+});
+test('community metadata edits cannot transfer ownership or alter file identity/publication', async () => {
+  const before = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  await call(customer, 'saveCommunityBuild', {...buildFields, id: community.id, title: 'Revised viewfinder', uploadedBy: otherCustomer.uid, file: {storagePath: 'elsewhere'}, published: false});
+  const after = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.equal(after.title, 'Revised viewfinder'); assert.equal(after.uploadedBy, customer.uid);
+  assert.deepEqual(after.file, before.file); assert.equal(after.published, true);
+});
+test('community downloads enforce the current license and record trusted consent before signing', async () => {
+  for (const user of [customer, otherCustomer, owner]) {
+    for (const consent of [{}, {licenseAccepted: 'true', licenseVersion: DOWNLOAD_LICENSE.version}, {licenseAccepted: true, licenseVersion: 'old'}]) {
+      await denied(call(user, 'downloadCommunityBuild', {id: community.id, ...consent}), 'FAILED_PRECONDITION');
+    }
+  }
+  await denied(call(otherCustomer, 'downloadCommunityBuild', {id: community.id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version, uid: 'forged'}), 'INTERNAL');
+  const entries = await db.collection('activity').where('action', '==', 'Community download license accepted').get();
+  assert.equal(entries.size, 1); const entry = entries.docs[0].data();
+  assert.equal(entry.uid, otherCustomer.uid); assert.equal(entry.actor, otherCustomer.email); assert.equal(entry.buildId, community.id);
+  assert.equal(entry.licenseText, DOWNLOAD_LICENSE.paragraphs.join('\n\n'));
+});
+test('pending replacements preserve the previous file, and can be safely discarded', async () => {
+  const original = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  replacement = await call(customer, 'beginCommunityUpload', {...buildFields, ...sharing, id: community.id, filename: 'v2.zip', size: 5});
+  let record = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.deepEqual(record.file, original.file); assert.equal(record.published, true);
+  assert.equal((await call(otherCustomer, 'communityBuilds')).items[0].pending, null);
+  await denied(call(customer, 'beginCommunityUpload', {...buildFields, ...sharing, id: community.id, filename: 'duplicate.zip', size: 5}), 'FAILED_PRECONDITION');
+  await denied(call(customer, 'saveCommunityBuild', {...buildFields, id: community.id}), 'FAILED_PRECONDITION');
+  await denied(call(customer, 'publishCommunityBuild', {id: community.id, published: true}), 'FAILED_PRECONDITION');
+  await assertSucceeds(uploadBytes(ref(storage(customer), replacement.storagePath), new Uint8Array(5), binary));
+  await call(owner, 'cancelCommunityUpload', {id: community.id, uploadId: replacement.uploadId});
+  record = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.deepEqual(record.file, original.file); assert.equal(record.pending, null); assert.equal(record.published, true);
+  assert.equal((await getAdminStorage(admin).bucket().file(replacement.storagePath).exists())[0], false);
+  await denied(call(customer, 'completeCommunityUpload', {id: community.id, uploadId: replacement.uploadId}), 'FAILED_PRECONDITION');
+  await assertFails(uploadBytes(ref(storage(customer), replacement.storagePath), new Uint8Array(5), binary));
+});
+test('replacement gets a new immutable file, removes the old file, and returns to private review', async () => {
+  const original = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  replacement = await call(customer, 'beginCommunityUpload', {...buildFields, ...sharing, id: community.id, version: '2.0', filename: 'v2.zip', size: 5});
+  await assertSucceeds(uploadBytes(ref(storage(customer), replacement.storagePath), new Uint8Array(5), binary));
+  await call(customer, 'completeCommunityUpload', {id: community.id, uploadId: replacement.uploadId});
+  const record = (await db.doc(`communityBuilds/${community.id}`).get()).data();
+  assert.notEqual(record.file.storagePath, original.file.storagePath); assert.equal(record.file.id, replacement.uploadId); assert.equal(record.version, '2.0');
+  assert.equal(record.published, false); assert.equal(record.uploadedBy, customer.uid);
+  assert.equal((await getAdminStorage(admin).bucket().file(original.file.storagePath).exists())[0], false);
+  assert.deepEqual(record.retiredPaths, []);
+  await denied(call(otherCustomer, 'downloadCommunityBuild', {id: community.id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version}), 'NOT_FOUND');
+});
+test('admins can edit, replace, publish and remove any community build without changing ownership', async () => {
+  await call(owner, 'saveCommunityBuild', {...buildFields, id: community.id, title: 'Moderated build'});
+  replacement = await call(owner, 'beginCommunityUpload', {...buildFields, ...sharing, id: community.id, filename: 'admin-fix.zip', size: 3});
+  await assertFails(uploadBytes(ref(storage(customer), replacement.storagePath), new Uint8Array(3), binary));
+  await assertSucceeds(uploadBytes(ref(storage(owner), replacement.storagePath), new Uint8Array(3), binary));
+  await call(owner, 'completeCommunityUpload', {id: community.id, uploadId: replacement.uploadId});
+  await call(owner, 'publishCommunityBuild', {id: community.id, published: true});
+  assert.equal((await db.doc(`communityBuilds/${community.id}`).get()).get('uploadedBy'), customer.uid);
+  await call(owner, 'publishCommunityBuild', {id: community.id, published: false});
+  await call(owner, 'deleteCommunityBuild', {id: community.id});
+  assert.equal((await db.doc(`communityBuilds/${community.id}`).get()).exists, false);
+  assert.equal((await getAdminStorage(admin).bucket().getFiles({prefix: `community-files/${community.id}/`}))[0].length, 0);
+});
+test('revocation blocks a contributor from managing or uploading to an existing build', async () => {
+  const pending = await call(customer, 'beginCommunityUpload', {...buildFields, ...sharing, filename: 'pending.stl', size: 4});
+  await call(owner, 'setAccess', {email: customer.email, active: false});
+  for (const operation of ['communityBuilds', 'completeCommunityUpload', 'cancelCommunityUpload', 'saveCommunityBuild', 'publishCommunityBuild', 'deleteCommunityBuild', 'downloadCommunityBuild']) {
+    await denied(call(customer, operation, {...buildFields, id: pending.id, uploadId: pending.uploadId, published: true}));
+  }
+  await assertFails(uploadBytes(ref(storage(customer), pending.storagePath), new Uint8Array(4), binary));
+  await call(owner, 'setAccess', {email: customer.email, active: true});
+  await denied(call(customer, 'communityBuilds'));
+  const validAfter = (await db.doc(`members/${customer.email}`).get()).get('validAfter');
+  const oldTime = JSON.parse(Buffer.from(customer.token.split('.')[1], 'base64url')).auth_time;
+  await assertFails(uploadBytes(ref(storage(customer, {auth_time: oldTime}), pending.storagePath), new Uint8Array(4), binary));
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, validAfter - Date.now()) + 25));
+  customer = await login(customer.email);
+  await call(customer, 'deleteCommunityBuild', {id: pending.id});
+  await assertFails(uploadBytes(ref(storage(customer), pending.storagePath), new Uint8Array(4), binary));
+});
+test('concurrent completion and deletion cannot republish or retain the deleted build', async () => {
+  const pending = await call(customer, 'beginCommunityUpload', {...buildFields, ...sharing, filename: 'race.stl', size: 4});
+  await assertSucceeds(uploadBytes(ref(storage(customer), pending.storagePath), new Uint8Array(4), binary));
+  const results = await Promise.allSettled([
+    call(customer, 'completeCommunityUpload', {id: pending.id, uploadId: pending.uploadId}),
+    call(owner, 'deleteCommunityBuild', {id: pending.id}),
+  ]);
+  assert.equal(results[1].status, 'fulfilled');
+  assert.equal((await db.doc(`communityBuilds/${pending.id}`).get()).exists, false);
+  for (const prefix of [`community-files/${pending.id}/`, `community-uploads/${pending.id}/`]) assert.equal((await getAdminStorage(admin).bucket().getFiles({prefix}))[0].length, 0);
+});

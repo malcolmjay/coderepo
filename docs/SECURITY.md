@@ -22,6 +22,20 @@ The personal-use license is defined once in `functions/src/download-license.ts` 
 
 Signed URLs are bearer credentials until expiry. A user can share a URL during that short window, a transfer started before expiry can continue, and a file already downloaded cannot be recalled. Revocation and unpublication block future authorization; they cannot erase existing copies or instantly invalidate an already issued URL. Administrators can intentionally share their own source files; the portal is access control, not DRM.
 
+## Community Builds
+
+Community uploads use the same verified, active membership and sign-in cutoff as official downloads, with a separate `communityBuilds` collection and `community-uploads/` / `community-files/` Storage paths. Official releases remain administrator-only. Ownership is set from the authenticated Firebase UID when a build is created and is never accepted from browser input. Every edit, upload replacement, completion, discard, publish/unpublish, and deletion checks that ownership or the current database administrator role; mutations recheck membership and ownership inside Firestore transactions.
+
+Public lists contain published builds only. **My builds** queries the caller's UID; **Manage all builds** requires an administrator. Responses allowlist display metadata and a server-computed `canManage` flag. They never return account emails, UIDs, Storage paths, generations, or internal cleanup records. Pending upload details are visible only to managers. Direct Firestore operations remain denied.
+
+Each build holds one file or ZIP package, up to **1 GiB / 1,073,741,824 bytes**, enforced by the browser, callable, and Storage rules. The user must explicitly accept the versioned community sharing statement; the server records its own agreement text, identity, upload ID, and timestamp in private activity. A customer can have one pending upload per build. The cap is per file, not a total-account quota; monitor Storage usage as community participation grows.
+
+Storage permits only create-only binary uploads for the exact declared build/upload ID, size, current upload initiator, active membership, and owner/admin entitlement. Even admins cannot write into another account's pending upload session. Overwrites, direct reads, token lookup, metadata updates, and deletes are denied. Completion checks and copies a generation-pinned staging file into a private immutable object with attachment disposition and no permanent Firebase token. No file content is executed or rendered by the application, and it does not perform malware scans.
+
+A replacement keeps the current file available while uploading, then atomically switches file metadata, returns the build to an unpublished draft, and removes the old object. Failed cleanup paths remain private and recorded for retry on completion or the next replacement; deleting a build removes both prefixes. Discard/delete reserves a server-owned state before removing files so late completion cannot publish discarded content. A failed deletion remains visible as **Removal pending** for the owner/admin to retry. Existing signed URLs and already downloaded files have the same limitations described above.
+
+All authorized customers may request a published community download. The owner/admin may also request their own private verified draft. Every request requires the current personal-use download license, records trusted consent, and returns a 60-second generation-pinned URL. Sharing permission is not a grant to redistribute the official library or third-party files; the upload form asks contributors to include only files they have permission to share.
+
 ## Hosting and operations
 
 Firebase Hosting serves HTTPS and security headers including CSP, no-referrer, anti-framing, and MIME-sniffing protection. The client uses bearer tokens for callable requests; there is no cookie-based custom action endpoint requiring a separate CSRF token. Firebase callable validation verifies ID tokens, and application authorization checks the allowlist. No cloud private keys or admin credentials are bundled into the browser.

@@ -8,6 +8,7 @@ The application now runs entirely within **one Firebase project**: Hosting, Auth
 
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
+- Community Builds for customer-made STL designs and code changes, with contributor names, private drafts, shared downloads, and uploader/admin-only editing, replacement, publication, and deletion.
 - The Camera Hacks Workshop visual style: charcoal surfaces, orange-red accents, the stacked wordmark, and locally hosted Hanken Grotesk / Space Mono fonts. The sign-in, library, and admin screens share the same responsive styling; font licences ship with the site.
 - The personal-use software and design license appears above the file list. An unchecked agreement box blocks downloads until selected; every download request also validates the current license version and records consent on the server.
 - Admin pages to import up to 10,000 customer emails from CSV or a pasted list, review invalid rows and duplicates, record purchase sources, revoke/restore access, and view an activity log.
@@ -70,6 +71,19 @@ All approved customers see all published releases. A Firebase identity alone doe
 One import accepts up to 10,000 rows. Emails are trimmed and lowercased, and duplicate emails use their first valid occurrence. Existing records keep their role, purchase source, and active/revoked state. No invitation emails are sent; authorized customers request their own sign-in link from the portal.
 
 Imports use the existing administrator-only endpoint in batches of at most 100, grouped by purchase source. Every batch checks current administrator access and commits atomically. Completed batches remain saved if a later batch fails. Resume retries the unconfirmed batch; if its response was lost after saving, those addresses appear as existing entries. Progress is held only in the open page. After a reload, safely import the same list again; existing records will be skipped.
+
+## Share a Community Build
+
+1. Open **Community Builds → Upload a build**. Add a title, contributor name or handle, version, category, compatibility, and installation/printing instructions. Contributor names are visible to customers; account emails are not.
+2. Choose one file up to **1 GiB**. Individual STL or source files work, or use a ZIP for a package with multiple files. Confirm that you created the files or have permission to share them for personal, non-commercial use. The official download license remains unchanged.
+3. Keep the tab open during the resumable upload. Once verified, the file appears as a **private draft** in **My builds**. Review it, then choose **Publish build** to share it with all authorized customers.
+4. Use **Edit build** to update details or replace the file. A verified replacement removes the previous file and returns the build to a private draft; publish it again when ready. Use **Unpublish** to make a build private, or **Delete build** to remove it and its files.
+
+Only the original uploader (identified by Firebase UID) or an active administrator can manage a build. Customers can never transfer ownership or edit someone else's files by changing a request. Administrators have **Manage all builds**, including private drafts and uploads from revoked accounts. This is separate from the official administrator-only release library.
+
+Interrupted uploads remain visible to the uploader and admins. Choose **Verify upload** if the transfer completed or **Discard upload** to retry. Discarding a replacement keeps the previous verified file. Closing the tab requires a new transfer. Community files are downloaded as attachments and are not executed or previewed by the portal; automated malware scanning is not included.
+
+Deploy this feature with **Functions, Hosting, Storage rules, and Firestore indexes**, not Hosting alone. No new Firebase service or external account is required. See [deployment instructions](docs/DEPLOYMENT.md#community-builds-upgrade).
 
 ## Verification
 

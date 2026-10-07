@@ -38,7 +38,7 @@ npx -y firebase-tools@latest deploy --only firestore,storage,functions,hosting
 
 Select the new project for the default alias. `.firebaserc` is local and ignored by git. In a pre-authenticated Google Cloud Shell, skip `login` and use `--project camera-hacks` on Firebase commands instead of selecting a local alias. The deploy publishes Hosting, the callable Function, Firestore rules/indexes, and Storage rules. The Firebase CLI will request enabling necessary Google APIs and may request an Artifact Registry cleanup policy; a short retention period avoids storing old build images indefinitely.
 
-**Accept the Storage-to-Firestore rules permission when prompted.** Storage upload rules read two documents from Firestore: the administrator membership and the draft release. The Storage service agent needs the Firebase-provided cross-service rules permission for this to work. If the prompt is missed, redeploy Storage rules and follow [Firebase's cross-service rules instructions](https://firebase.google.com/docs/storage/security/rules-conditions#enhance_with_firestore).
+**Accept the Storage-to-Firestore rules permission when prompted.** Storage upload rules read two documents from Firestore: the membership and the draft release or community build. The Storage service agent needs the Firebase-provided cross-service rules permission for this to work. If the prompt is missed, redeploy Storage rules and follow [Firebase's cross-service rules instructions](https://firebase.google.com/docs/storage/security/rules-conditions#enhance_with_firestore).
 
 Do not merge unrelated permissive rules into this project. Firestore client access is denied; the callable Function authorizes all database operations. Storage allows only authorized, create-only draft uploads.
 
@@ -110,3 +110,18 @@ Local emulators cover the rules and callable authorization. They do **not** esta
 - License wording is shared in `functions/src/download-license.ts`. Increment its version whenever wording changes, build, and deploy **both Functions and Hosting**. An older open page is asked to refresh and accept the new version. The license governs the supplied software and design files; the displayed wording explicitly permits commercial use of photographs, videos, and other media created with the camera.
 
 Official references: [email-link auth](https://firebase.google.com/docs/auth/web/email-link-auth), [Hosting configuration](https://firebase.google.com/docs/hosting/full-config), [Storage billing](https://firebase.google.com/docs/storage/faqs-storage-changes-announced-sept-2024), [signed URL permissions](https://cloud.google.com/storage/docs/access-control/signing-urls-with-helpers).
+
+## Community Builds upgrade
+
+From the existing authenticated Cloud Shell checkout:
+
+```bash
+cd ~/camera-hacks-portal
+git pull --ff-only
+npm run build
+npx -y firebase-tools@latest deploy --project camera-hacks --only firestore,storage,functions,hosting
+```
+
+This update changes the callable Function, Storage rules, Hosting app, and adds two Firestore indexes for published and owner-filtered community lists. Deploy all four targets together. Wait for the new `communityBuilds` indexes to finish building before testing these lists. There is no database migration, new Firebase service, or external account to configure.
+
+Verify with two authorized customer accounts and one administrator: upload a small STL/ZIP as the first customer, review the private draft, publish it, accept the license and download it as the second customer. The second customer must not see editing controls or private drafts. Check that the owner and administrator can edit, replace, unpublish, and delete the test build, and that a replacement requires publishing again. Existing official Downloads and Admin release uploads should continue to work. Use test files you own, not customer payloads.

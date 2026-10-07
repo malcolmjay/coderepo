@@ -52,3 +52,24 @@ test('download consent must be explicit and refer to the current license', () =>
   }
   assert.doesNotThrow(() => assertDownloadLicense(true, DOWNLOAD_LICENSE.version));
 });
+
+test('community edits allow only the uploader or an administrator', async () => {
+  const {assertBuildOwner} = await import('../functions/lib/community-domain.js');
+  assert.doesNotThrow(() => assertBuildOwner('alice', 'customer', 'alice'));
+  assert.doesNotThrow(() => assertBuildOwner('admin', 'admin', 'alice'));
+  assert.throws(() => assertBuildOwner('bob', 'customer', 'alice'), error => error.code === 'permission-denied');
+});
+test('community input allowlists metadata, bounds uploads, and requires explicit sharing consent', async () => {
+  const {communityFields, communitySize, assertSharing} = await import('../functions/lib/community-domain.js');
+  const {COMMUNITY_SHARING} = await import('../functions/lib/community-config.js');
+  const fields = {title: 'Viewfinder', authorName: 'Builder', version: '1.0', kind: 'models', compatibility: 'WLV-01', notes: 'Print in PETG.'};
+  const parsed = communityFields({...fields, uploadedBy: 'forged', role: 'admin', file: {}, published: true});
+  assert.deepEqual(parsed, fields);
+  for (const kind of ['firmware', 'constructor', '__proto__', 'unknown']) assert.throws(() => communityFields({...fields, kind}));
+  assert.throws(() => communityFields({...fields, notes: ''}));
+  for (const size of [0, -1, '4', 1.5, Infinity, 1024 ** 3 + 1]) assert.throws(() => communitySize(size));
+  for (const size of [1, 1024 ** 3]) assert.equal(communitySize(size), size);
+  for (const sharingAccepted of [undefined, false, 'true', 1]) assert.throws(() => assertSharing({sharingAccepted, sharingVersion: COMMUNITY_SHARING.version}));
+  assert.throws(() => assertSharing({sharingAccepted: true, sharingVersion: 'stale'}));
+  assert.doesNotThrow(() => assertSharing({sharingAccepted: true, sharingVersion: COMMUNITY_SHARING.version}));
+});

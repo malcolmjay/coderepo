@@ -1,6 +1,21 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function activeMember() {
+      let member = firestore.get(/databases/(default)/documents/members/$(request.auth.token.email.lower())).data;
+      return request.auth.token.email_verified == true
+        && member.active == true
+        && request.auth.token.auth_time * 1000 >= member.validAfter;
+    }
+    function communityUpload(buildId, uploadId) {
+      let build = firestore.get(/databases/(default)/documents/communityBuilds/$(buildId)).data;
+      let member = firestore.get(/databases/(default)/documents/members/$(request.auth.token.email.lower())).data;
+      return build.status != 'deleting'
+        && (build.uploadedBy == request.auth.uid || member.role == 'admin')
+        && build.pending.id == uploadId && build.pending.status == 'uploading'
+        && build.pending.uploadedBy == request.auth.uid
+        && request.resource.size == build.pending.size;
+    }
     function admin() {
       let member = firestore.get(/databases/(default)/documents/members/$(request.auth.token.email.lower())).data;
       return request.auth.token.email_verified == true
@@ -16,6 +31,13 @@ service firebase.storage {
         && firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.status == 'uploading'
         && request.resource.size == firestore.get(/databases/(default)/documents/releases/$(releaseId)).data.size
         && request.resource.size > 0 && request.resource.size <= 21474836480
+        && request.resource.contentType == 'application/octet-stream';
+    }
+    match /community-uploads/{buildId}/{uploadId}/payload {
+      allow read, update, delete: if false;
+      allow create: if resource == null && request.auth != null && activeMember()
+        && communityUpload(buildId, uploadId)
+        && request.resource.size > 0 && request.resource.size <= 1073741824
         && request.resource.contentType == 'application/octet-stream';
     }
     match /{path=**} { allow read, write: if false; }

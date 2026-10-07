@@ -29,5 +29,5 @@ export async function connect() {
   await setPersistence(auth, browserSessionPersistence);
   const call = httpsCallable<Record<string, unknown>, unknown>(functions, "portal");
   const verify = httpsCallable<Record<string, unknown>, unknown>(functions, "portal", {timeout: (VERIFICATION_TIMEOUT_SECONDS + 60) * 1000});
-  return {auth, storage, api: async <T>(operation: string, data: Record<string, unknown> = {}): Promise<T> => (await (operation === "completeUpload" ? verify : call)({operation, ...data})).data as T};
+  return {auth, storage, api: async <T>(operation: string, data: Record<string, unknown> = {}): Promise<T> => (await (["completeUpload", "completeCommunityUpload"].includes(operation) ? verify : call)({operation, ...data})).data as T};
 }

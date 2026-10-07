@@ -5,6 +5,7 @@ import { mountCustomerImport } from "./customer-import";
 import { uploadFile } from "./file-upload";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../functions/src/upload-config.js";
 import { DOWNLOAD_LICENSE } from "../functions/src/download-license.js";
+import {communityPage} from "./community";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
@@ -22,6 +23,7 @@ let session: Access | null = null;
 let client: Awaited<ReturnType<typeof connect>>;
 let navigating = 0;
 let uploading = false;
+let uploadPage = "#releases";
 let importing = false;
 let completing = false;
 let currentReleases: Release[] = [];
@@ -54,7 +56,7 @@ function busy(form: HTMLFormElement, value: boolean) {
 }
 
 function navigation() {
-  nav.innerHTML = session ? `<a href="#downloads"><span class="nav-index" aria-hidden="true">01 /</span>Downloads</a>${session.role === "admin" ? '<a href="#customers"><span class="nav-index" aria-hidden="true">02 /</span>Admin</a>' : ""}<button class="link-button" id="signout"><span class="nav-index" aria-hidden="true">${session.role === "admin" ? "03" : "02"} /</span>Sign out</button>` : '<span class="header-label">CUSTOMER DOWNLOADS</span>';
+  nav.innerHTML = session ? `<a href="#downloads"><span class="nav-index" aria-hidden="true">01 /</span>Downloads</a><a href="#community"><span class="nav-index" aria-hidden="true">02 /</span>Community Builds</a>${session.role === "admin" ? '<a href="#customers"><span class="nav-index" aria-hidden="true">03 /</span>Admin</a>' : ""}<button class="link-button" id="signout"><span class="nav-index" aria-hidden="true">${session.role === "admin" ? "04" : "03"} /</span>Sign out</button>` : '<span class="header-label">CUSTOMER DOWNLOADS</span>';
   document.querySelector("#signout")?.addEventListener("click", () => {void client.auth.signOut();});
 }
 
@@ -108,10 +110,10 @@ async function loadSession() {
   catch (error) {await signOut(client.auth); login(errorMessage(error));}
 }
 
-async function download(id: string, isAccepted: () => boolean) {
+async function download(id: string, isAccepted: () => boolean, operation = "download") {
   if (!isAccepted()) return;
   try {
-    const {url} = await client.api<{url: string}>("download", {id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version});
+    const {url} = await client.api<{url: string}>(operation, {id, licenseAccepted: true, licenseVersion: DOWNLOAD_LICENSE.version});
     if (!isAccepted()) return; // The user may uncheck or leave while the link is being prepared.
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" || !(parsed.hostname === "storage.googleapis.com" || parsed.hostname.endsWith(".storage.googleapis.com"))) throw new Error("Unexpected download location");
@@ -210,7 +212,7 @@ function editor(release?: Release) {
       else {
         const file = data.get("file") as File;
         if (!file.size || file.size > MAX_UPLOAD_BYTES) {notice(`Choose a file between 1 byte and ${MAX_UPLOAD_LABEL}.`, true); return;}
-        uploading = true;
+        uploading = true; uploadPage = "#releases";
         form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select").forEach(field => {field.disabled = true;});
         const {id, storagePath} = await client.api<{id: string; storagePath: string}>("beginUpload", {...fields, size: file.size, filename: file.name});
         await uploadFile(client.storage, storagePath, file, form);
@@ -272,7 +274,7 @@ async function customersPage(token: number) {
 
 async function activityPage(token: number) {
   const first = await client.api<Page<Event>>("activity"); if (token !== navigating) return;
-  main.innerHTML = heading("Recent activity.", "Customer access and release changes.") + adminNav("activity") + '<div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Recent activity"><table><thead><tr><th>Date</th><th>Action</th><th>Details</th><th>Administrator</th></tr></thead><tbody id="events"></tbody></table></div><button id="more" class="button secondary load-more">Load more activity</button>';
+  main.innerHTML = heading("Recent activity.", "Customer access, releases, and community contributions.") + adminNav("activity") + '<div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Recent activity"><table><thead><tr><th>Date</th><th>Action</th><th>Details</th><th>Account</th></tr></thead><tbody id="events"></tbody></table></div><button id="more" class="button secondary load-more">Load more activity</button>';
   const append = (items: Event[]) => document.querySelector("#events")!.insertAdjacentHTML("beforeend", items.map(item => `<tr><td>${esc(new Date(item.createdAt).toLocaleString())}</td><td>${esc(item.action)}</td><td>${esc(item.target)}</td><td>${esc(item.actor)}</td></tr>`).join(""));
   append(first.items); if (!first.items.length) document.querySelector("#events")!.innerHTML = '<tr><td colspan="4">No activity yet.</td></tr>';
   let cursor = first.next; const button = document.querySelector<HTMLButtonElement>("#more")!; button.hidden = !cursor;
@@ -285,15 +287,22 @@ async function route() {
   main.innerHTML = '<p class="loading" role="status">Loading…</p>';
   try {
     const page = location.hash.slice(1);
+    const community = ["community", "community-mine", "community-manage"].includes(page);
+    const adminPage = ["customers", "releases", "activity"].includes(page);
     nav.querySelectorAll<HTMLAnchorElement>("a").forEach(link => {
-      const active = link.hash === "#downloads" ? !["customers", "releases", "activity"].includes(page) : ["customers", "releases", "activity"].includes(page);
+      const active = link.hash === "#community" ? community : link.hash === "#customers" ? adminPage : !adminPage && !community;
       if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
     });
-    if (session.role === "admin" && page === "customers") await customersPage(token);
+    if (community) await communityPage(main, page === "community-mine" ? "mine" : page === "community-manage" && session.role === "admin" ? "manage" : "all", {
+      api: client.api, storage: client.storage, admin: session.role === "admin", heading, licensePanel: downloadLicensePanel,
+      notice, error: errorMessage, download, refresh: route, isCurrent: () => token === navigating,
+      setUploading: value => {if (value) uploadPage = location.hash; uploading = value;},
+    });
+    else if (session.role === "admin" && page === "customers") await customersPage(token);
     else if (session.role === "admin" && page === "releases") await releasesPage(true, token);
     else if (session.role === "admin" && page === "activity") await activityPage(token);
     else await releasesPage(false, token);
-    document.title = `${session.role === "admin" && ["customers", "releases", "activity"].includes(page) ? "Admin" : "Downloads"} · Camera Hacks`;
+    document.title = `${community ? "Community Builds" : session.role === "admin" && adminPage ? "Admin" : "Downloads"} · Camera Hacks`;
   } catch (error) {
     if (token !== navigating) return;
     const code = (error as {code?: string}).code;
@@ -303,11 +312,11 @@ async function route() {
 }
 
 document.addEventListener("click", event => {
-  if (uploading && (event.target as Element).closest(".header a, #nav button, .admin-nav a")) {event.preventDefault(); event.stopImmediatePropagation();}
+  if (uploading && (event.target as Element).closest(".header a, #nav button, .admin-nav a, .footer a")) {event.preventDefault(); event.stopImmediatePropagation();}
   if (importing && (event.target as Element).closest(".header a, #nav button, .admin-nav a, #customers button, #more")) {event.preventDefault(); event.stopImmediatePropagation();}
 }, true);
 window.addEventListener("hashchange", () => {
-  if (uploading) {history.replaceState(null, "", "#releases"); return;}
+  if (uploading) {history.replaceState(null, "", uploadPage); return;}
   if (importing) {history.replaceState(null, "", "#customers"); return;}
   void route();
 });
