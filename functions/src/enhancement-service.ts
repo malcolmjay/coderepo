@@ -3,7 +3,7 @@ import {assertAccess, PortalError, type Identity, type Member} from "./domain.js
 import {enhancementFields, enhancementId, enhancementReview} from "./enhancement-domain.js";
 
 export const ENHANCEMENT_CUSTOMER_OPERATIONS = new Set(["enhancementRequests", "submitEnhancement", "setEnhancementLike"]);
-export const ENHANCEMENT_OPERATIONS = new Set([...ENHANCEMENT_CUSTOMER_OPERATIONS, "reviewEnhancement"]);
+export const ENHANCEMENT_OPERATIONS = new Set([...ENHANCEMENT_CUSTOMER_OPERATIONS, "reviewEnhancement", "deleteEnhancement"]);
 const db = () => getFirestore();
 const requests = () => db().collection("enhancementRequests");
 const publicRequest = (record: DocumentData, id: string, uid: string, liked: boolean) => ({
@@ -35,11 +35,13 @@ export async function enhancementDispatch(operation: string, data: Record<string
   }
 
   const request = requests().doc(enhancementId(data.id));
+  const deleted = db().collection("deletedEnhancementRequests").doc(request.id);
   if (operation === "submitEnhancement") {
     const fields = enhancementFields(data);
     return db().runTransaction(async tx => {
       const member = await authorize(tx, memberRef, user);
-      const existing = await tx.get(request);
+      const [existing, tombstone] = await tx.getAll(request, deleted);
+      if (tombstone.exists) throw new PortalError("failed-precondition", "This request was deleted by an administrator. Refresh before submitting a new request.");
       if (existing.exists) {
         // A retry after a lost response must not create a duplicate request or
         // overwrite a review/likes. The browser reuses one ID per submission.
@@ -54,6 +56,24 @@ export async function enhancementDispatch(operation: string, data: Record<string
       tx.create(db().collection("activity").doc(), {actor: member.email, uid: user.uid, action: "Enhancement submitted", target: fields.title, requestId: request.id, createdAt: Date.now()});
       return {id: request.id};
     });
+  }
+
+  if (operation === "deleteEnhancement") {
+    await db().runTransaction(async tx => {
+      const member = await authorize(tx, memberRef, user, true);
+      const [snapshot, tombstone] = await tx.getAll(request, deleted);
+      if (tombstone.exists) return; // A retry still completes any remaining like cleanup.
+      if (!snapshot.exists) throw new PortalError("not-found", "Enhancement request not found.");
+      // Deleting the parent first prevents concurrent likes/reviews from committing.
+      // The minimal private marker also prevents old submission retries from recreating it.
+      tx.create(deleted, {deletedAt: Date.now()});
+      tx.delete(request);
+      tx.create(db().collection("activity").doc(), {actor: member.email, uid: user.uid, action: "Enhancement deleted",
+        target: snapshot.get("title"), requestId: request.id, createdAt: Date.now()});
+    });
+    try {await db().recursiveDelete(request.collection("likes"));}
+    catch {throw new PortalError("failed-precondition", "The request was removed, but its likes could not be fully cleared. Try deleting it again to finish.");}
+    return {ok: true};
   }
 
   if (operation === "setEnhancementLike") {

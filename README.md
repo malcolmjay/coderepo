@@ -94,6 +94,8 @@ Sort by **Newest first** or **Most liked**. Search and status filters apply to t
 
 Administrators have **Update status & note** on each request. The available statuses are **Pending Review**, **Approved**, **Not Approved**, **Pending Development**, **In Development**, **Testing**, and **Live**. The single **Status note** is visible to all authorized customers. Saving replaces the current note; clearing the field removes it. This is not a customer comment thread. If another administrator updates a review while a form is open, refresh and review their changes before saving again.
 
+Administrators also have **Delete request**. A confirmation names the request and explains that its description, status note, and likes will be permanently removed. Customers cannot delete requests, including their own. Deletions appear in the private administrator activity log.
+
 Deploy this update with **Functions and Hosting**. It uses the existing Firestore database and automatic single-field indexes; no new service, rules change, or composite index is required. See [deployment instructions](docs/DEPLOYMENT.md#enhancement-requests-upgrade).
 
 ## Verification

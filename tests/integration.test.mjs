@@ -5,7 +5,7 @@ import {initializeApp as initializeAdmin, deleteApp as deleteAdmin} from 'fireba
 import {getFirestore} from 'firebase-admin/firestore';
 import {getStorage as getAdminStorage} from 'firebase-admin/storage';
 import {initializeTestEnvironment, assertFails, assertSucceeds} from '@firebase/rules-unit-testing';
-import {doc, getDoc, setDoc} from 'firebase/firestore';
+import {doc, getDoc, setDoc, deleteDoc} from 'firebase/firestore';
 import {ref, uploadBytes, getBytes, getMetadata, updateMetadata, deleteObject} from 'firebase/storage';
 import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
 
@@ -365,8 +365,8 @@ const enhancementFields = {title: 'Selectable focus peaking colours', descriptio
 const enhancementId = 'e'.repeat(32);
 let reviewVersion = 0;
 
-test('enhancement operations require membership and only admins may review requests', async () => {
-  for (const operation of ['enhancementRequests', 'submitEnhancement', 'setEnhancementLike', 'reviewEnhancement']) {
+test('enhancement operations require membership and only admins may manage requests', async () => {
+  for (const operation of ['enhancementRequests', 'submitEnhancement', 'setEnhancementLike', 'reviewEnhancement', 'deleteEnhancement']) {
     await denied(call(null, operation), 'UNAUTHENTICATED');
     await denied(call(stranger, operation));
     await denied(call(revoked, operation));
@@ -474,4 +474,67 @@ test('revoked customers cannot submit, read, or change likes, including with an 
   await new Promise(resolve => setTimeout(resolve, Math.max(0, validAfter - Date.now()) + 25));
   customer = await login(customer.email);
   assert.equal((await call(customer, 'setEnhancementLike', {id: enhancementId, liked: false})).likeCount, 2);
+});
+
+test('only active administrators can delete enhancements, including requests submitted by the caller', async () => {
+  for (const user of [customer, otherCustomer]) {
+    await denied(call(user, 'deleteEnhancement', {id: enhancementId}));
+    await denied(call(user, 'deleteEnhancement', {id: enhancementId, role: 'admin', admin: true, uid: owner.uid}));
+  }
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).exists, true);
+  const inactiveEmail = 'inactive-enhancement-admin@example.com';
+  await db.doc(`members/${inactiveEmail}`).set({email: inactiveEmail, role: 'admin', active: false, validAfter: 0});
+  await denied(call(await login(inactiveEmail), 'deleteEnhancement', {id: enhancementId}));
+  for (const user of [customer, owner]) {
+    const client = env.authenticatedContext(user.uid, {email: user.email, email_verified: true, admin: true}).firestore();
+    await assertFails(deleteDoc(doc(client, `enhancementRequests/${enhancementId}`)));
+    const marker = doc(client, `deletedEnhancementRequests/${enhancementId}`);
+    await assertFails(getDoc(marker)); await assertFails(setDoc(marker, {deletedAt: 1})); await assertFails(deleteDoc(marker));
+  }
+});
+test('admin deletion removes the request and every like, records one audit, and blocks submission replay', async () => {
+  const id = 'd'.repeat(32), request = db.doc(`enhancementRequests/${id}`);
+  await call(customer, 'submitEnhancement', {id, ...enhancementFields});
+  await call(owner, 'reviewEnhancement', {id, status: 'Approved', statusNote: 'A note to remove.', reviewVersion: 0});
+  await call(customer, 'setEnhancementLike', {id, liked: true});
+  // More than one write batch worth of likes must be removed completely.
+  for (let start = 0; start < 520; start += 260) {
+    const batch = db.batch();
+    for (let i = start; i < start + 260; i++) batch.set(request.collection('likes').doc(`test-voter-${i}`), {createdAt: Date.now()});
+    await batch.commit();
+  }
+  await request.update({likeCount: 521});
+  assert.deepEqual(await call(owner, 'deleteEnhancement', {id}), {ok: true});
+  assert.equal((await request.get()).exists, false); assert.equal((await request.collection('likes').get()).size, 0);
+  const marker = (await db.doc(`deletedEnhancementRequests/${id}`).get()).data();
+  assert.deepEqual(Object.keys(marker), ['deletedAt']); assert(marker.deletedAt > 0);
+  for (const sort of ['newest', 'popular']) assert(!(await call(customer, 'enhancementRequests', {sort})).items.some(item => item.id === id));
+  await denied(call(customer, 'submitEnhancement', {id, ...enhancementFields}), 'FAILED_PRECONDITION');
+  await denied(call(otherCustomer, 'submitEnhancement', {id, ...enhancementFields}), 'FAILED_PRECONDITION');
+  await denied(call(customer, 'setEnhancementLike', {id, liked: true}), 'NOT_FOUND');
+  await denied(call(owner, 'reviewEnhancement', {id, status: 'Live', statusNote: '', reviewVersion: 1}), 'NOT_FOUND');
+  // Simulate leftover votes from an interrupted cleanup; retrying finishes it.
+  await request.collection('likes').doc('unfinished-cleanup').set({createdAt: Date.now()});
+  await call(owner, 'deleteEnhancement', {id}); await call(owner, 'deleteEnhancement', {id});
+  assert.equal((await request.collection('likes').get()).size, 0);
+  const audits = (await db.collection('activity').where('action', '==', 'Enhancement deleted').get()).docs.filter(doc => doc.get('requestId') === id);
+  assert.equal(audits.length, 1); assert.equal(audits[0].get('actor'), owner.email); assert.equal(audits[0].get('target'), enhancementFields.title);
+  await denied(call(owner, 'deleteEnhancement', {id: '../members'}), 'INVALID_ARGUMENT');
+  await denied(call(owner, 'deleteEnhancement', {id: '0'.repeat(32)}), 'NOT_FOUND');
+});
+test('concurrent enhancement deletion, likes, reviews, and submission retries cannot leave or recreate a request', async () => {
+  const id = 'b'.repeat(32), request = db.doc(`enhancementRequests/${id}`);
+  await call(customer, 'submitEnhancement', {id, ...enhancementFields});
+  const results = await Promise.allSettled([
+    call(owner, 'deleteEnhancement', {id}), call(owner, 'deleteEnhancement', {id}),
+    call(customer, 'setEnhancementLike', {id, liked: true}),
+    call(owner, 'reviewEnhancement', {id, status: 'Testing', statusNote: 'Concurrent review.', reviewVersion: 0}),
+    call(customer, 'submitEnhancement', {id, ...enhancementFields}),
+  ]);
+  for (const result of results.slice(0, 2)) assert.equal(result.status, 'fulfilled');
+  for (const result of results.slice(2)) if (result.status === 'rejected') assert(['NOT_FOUND', 'FAILED_PRECONDITION'].includes(result.reason.code));
+  assert.equal((await request.get()).exists, false); assert.equal((await request.collection('likes').get()).size, 0);
+  assert.equal((await db.doc(`deletedEnhancementRequests/${id}`).get()).exists, true);
+  const audits = (await db.collection('activity').where('action', '==', 'Enhancement deleted').get()).docs.filter(doc => doc.get('requestId') === id);
+  assert.equal(audits.length, 1);
 });
