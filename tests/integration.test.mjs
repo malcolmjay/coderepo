@@ -360,3 +360,118 @@ test('concurrent completion and deletion cannot republish or retain the deleted 
   assert.equal((await db.doc(`communityBuilds/${pending.id}`).get()).exists, false);
   for (const prefix of [`community-files/${pending.id}/`, `community-uploads/${pending.id}/`]) assert.equal((await getAdminStorage(admin).bucket().getFiles({prefix}))[0].length, 0);
 });
+
+const enhancementFields = {title: 'Selectable focus peaking colours', description: 'Choose red, blue, or yellow peaking for better visibility.'};
+const enhancementId = 'e'.repeat(32);
+let reviewVersion = 0;
+
+test('enhancement operations require membership and only admins may review requests', async () => {
+  for (const operation of ['enhancementRequests', 'submitEnhancement', 'setEnhancementLike', 'reviewEnhancement']) {
+    await denied(call(null, operation), 'UNAUTHENTICATED');
+    await denied(call(stranger, operation));
+    await denied(call(revoked, operation));
+  }
+  await denied(call(customer, 'reviewEnhancement', {id: enhancementId, status: 'Live', statusNote: 'Forged admin note', reviewVersion: 0, role: 'admin', admin: true}));
+  await denied(call(customer, 'reviewEnhancement', {id: enhancementId, status: 'Live', statusNote: 'Forged admin note', reviewVersion: 0}));
+});
+test('new enhancements default to Pending Review and submissions are safe to retry', async () => {
+  const request = {id: enhancementId, ...enhancementFields, status: 'Live', statusNote: 'Forged', likeCount: 99, createdBy: owner.uid, createdAt: 1};
+  await Promise.all([call(customer, 'submitEnhancement', request), call(customer, 'submitEnhancement', request)]);
+  const record = (await db.doc(`enhancementRequests/${enhancementId}`).get()).data();
+  assert.equal(record.status, 'Pending Review'); assert.equal(record.statusNote, ''); assert.equal(record.likeCount, 0);
+  assert.equal(record.createdBy, customer.uid); assert(record.createdAt > 1); assert.equal(record.reviewVersion, 0);
+  assert.equal((await db.collection('activity').where('action', '==', 'Enhancement submitted').get()).size, 1);
+  await denied(call(otherCustomer, 'submitEnhancement', {id: enhancementId, ...enhancementFields}), 'FAILED_PRECONDITION');
+  await denied(call(customer, 'submitEnhancement', {id: enhancementId, ...enhancementFields, title: 'Changed after submission'}), 'FAILED_PRECONDITION');
+});
+test('enhancement listings reveal status and counts without exposing customer or liker identities', async () => {
+  const mine = (await call(customer, 'enhancementRequests')).items[0];
+  const other = (await call(otherCustomer, 'enhancementRequests')).items[0];
+  assert.equal(mine.mine, true); assert.equal(other.mine, false); assert.equal(other.status, 'Pending Review'); assert.equal(other.liked, false);
+  for (const key of ['createdBy', 'email', 'uid', 'likes', 'likerEmails']) assert.equal(other[key], undefined);
+  await denied(call(customer, 'enhancementRequests', {sort: 'unsafe-field'}), 'INVALID_ARGUMENT');
+  await denied(call(customer, 'enhancementRequests', {cursor: '../private'}), 'INVALID_ARGUMENT');
+});
+test('likes are one per authenticated account, idempotent, and can be removed', async () => {
+  const input = {id: enhancementId, liked: true, uid: owner.uid, likeCount: 500};
+  const [first, retry] = await Promise.all([call(customer, 'setEnhancementLike', input), call(customer, 'setEnhancementLike', input)]);
+  assert.equal(first.likeCount, 1); assert.equal(retry.likeCount, 1);
+  const likes = await db.collection(`enhancementRequests/${enhancementId}/likes`).get();
+  assert.equal(likes.size, 1); assert.equal(likes.docs[0].id, customer.uid);
+  assert.equal((await call(customer, 'enhancementRequests')).items[0].liked, true);
+  assert.equal((await call(otherCustomer, 'enhancementRequests')).items[0].liked, false);
+  await Promise.all([call(otherCustomer, 'setEnhancementLike', {id: enhancementId, liked: true}), call(owner, 'setEnhancementLike', {id: enhancementId, liked: true})]);
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).get('likeCount'), 3);
+  await Promise.all([call(customer, 'setEnhancementLike', {id: enhancementId, liked: false}), call(customer, 'setEnhancementLike', {id: enhancementId, liked: false})]);
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).get('likeCount'), 2);
+  assert.equal((await db.collection(`enhancementRequests/${enhancementId}/likes`).get()).size, 2);
+  for (const liked of [undefined, 'true', 1, null]) await denied(call(customer, 'setEnhancementLike', {id: enhancementId, liked}), 'INVALID_ARGUMENT');
+  await denied(call(customer, 'setEnhancementLike', {id: '0'.repeat(32), liked: true}), 'NOT_FOUND');
+});
+test('administrator can use all seven statuses and replace or clear the single note', async () => {
+  const statuses = ['Pending Review', 'Approved', 'Not Approved', 'Pending Development', 'In Development', 'Testing', 'Live'];
+  for (const status of statuses) {
+    const statusNote = `Current note for ${status}`;
+    const result = await call(owner, 'reviewEnhancement', {id: enhancementId, status, statusNote, reviewVersion, createdBy: owner.uid, likeCount: 999, title: 'Forged title'});
+    reviewVersion++;
+    assert.equal(result.reviewVersion, reviewVersion);
+    const record = (await db.doc(`enhancementRequests/${enhancementId}`).get()).data();
+    assert.equal(record.status, status); assert.equal(record.statusNote, statusNote);
+    assert.equal(record.createdBy, customer.uid); assert.equal(record.likeCount, 2); assert.equal(record.title, enhancementFields.title);
+    const visible = (await call(otherCustomer, 'enhancementRequests')).items[0];
+    assert.equal(visible.status, status); assert.equal(visible.statusNote, statusNote); assert(visible.statusUpdatedAt > 0);
+  }
+  await call(owner, 'reviewEnhancement', {id: enhancementId, status: 'Live', statusNote: '', reviewVersion}); reviewVersion++;
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).get('statusNote'), '');
+  await denied(call(owner, 'reviewEnhancement', {id: enhancementId, status: 'Done', statusNote: '', reviewVersion}), 'INVALID_ARGUMENT');
+  await denied(call(customer, 'reviewEnhancement', {id: enhancementId, status: 'Approved', statusNote: 'Attempted note', reviewVersion}));
+});
+test('stale admin reviews cannot overwrite a newer note, and likes do not invalidate a review', async () => {
+  await denied(call(owner, 'reviewEnhancement', {id: enhancementId, status: 'Testing', statusNote: 'Stale note', reviewVersion: reviewVersion - 1}), 'FAILED_PRECONDITION');
+  await call(customer, 'setEnhancementLike', {id: enhancementId, liked: true});
+  await call(owner, 'reviewEnhancement', {id: enhancementId, status: 'Testing', statusNote: 'Testing with customers.', reviewVersion}); reviewVersion++;
+  const record = (await db.doc(`enhancementRequests/${enhancementId}`).get()).data();
+  assert.equal(record.likeCount, 3); assert.equal(record.statusNote, 'Testing with customers.');
+  await call(customer, 'submitEnhancement', {id: enhancementId, ...enhancementFields});
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).get('reviewVersion'), reviewVersion, 'submission retries must not reset review state');
+});
+test('direct database reads and writes cannot expose likes or forge request statuses and counts', async () => {
+  for (const user of [customer, otherCustomer, owner]) {
+    const context = env.authenticatedContext(user.uid, {email: user.email, email_verified: true, admin: true});
+    for (const path of [`enhancementRequests/${enhancementId}`, `enhancementRequests/${enhancementId}/likes/${customer.uid}`]) {
+      await assertFails(getDoc(doc(context.firestore(), path)));
+      await assertFails(setDoc(doc(context.firestore(), path), {status: 'Live', likeCount: 5000, statusNote: 'Forged'}));
+    }
+  }
+});
+test('enhancement pagination supports newest and most-liked ordering with bounded pages', async () => {
+  const batch = db.batch();
+  const ids = Array.from({length: 55}, (_, i) => i.toString(16).padStart(32, 'a'));
+  ids.forEach((id, i) => batch.create(db.doc(`enhancementRequests/${id}`), {...enhancementFields, createdBy: otherCustomer.uid, status: 'Pending Review', statusNote: '', statusUpdatedAt: null, reviewVersion: 0, likeCount: i, createdAt: Date.now() + i + 10000}));
+  await batch.commit();
+  for (const sort of ['newest', 'popular']) {
+    const first = await call(customer, 'enhancementRequests', {sort});
+    assert.equal(first.items.length, 50); assert(first.next);
+    const second = await call(customer, 'enhancementRequests', {sort, cursor: first.next});
+    assert.equal(second.items.length, 6); assert.equal(second.next, null);
+    const all = first.items.concat(second.items);
+    assert.equal(new Set(all.map(item => item.id)).size, 56);
+    const field = sort === 'popular' ? 'likeCount' : 'createdAt';
+    for (let i = 1; i < all.length; i++) assert(all[i - 1][field] >= all[i][field]);
+    assert.equal(all.find(item => item.id === enhancementId).liked, true);
+  }
+  const remove = db.batch(); ids.forEach(id => remove.delete(db.doc(`enhancementRequests/${id}`))); await remove.commit();
+});
+test('revoked customers cannot submit, read, or change likes, including with an old restored session', async () => {
+  await call(owner, 'setAccess', {email: customer.email, active: false});
+  for (const operation of ['enhancementRequests', 'submitEnhancement', 'setEnhancementLike']) {
+    await denied(call(customer, operation, {id: enhancementId, ...enhancementFields, liked: false}));
+  }
+  assert.equal((await db.doc(`enhancementRequests/${enhancementId}`).get()).get('likeCount'), 3);
+  await call(owner, 'setAccess', {email: customer.email, active: true});
+  await denied(call(customer, 'setEnhancementLike', {id: enhancementId, liked: false}));
+  const validAfter = (await db.doc(`members/${customer.email}`).get()).get('validAfter');
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, validAfter - Date.now()) + 25));
+  customer = await login(customer.email);
+  assert.equal((await call(customer, 'setEnhancementLike', {id: enhancementId, liked: false})).likeCount, 2);
+});

@@ -9,6 +9,7 @@ The application now runs entirely within **one Firebase project**: Hosting, Auth
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
 - Community Builds for customer-made STL designs and code changes, with contributor names, private drafts, shared downloads, and uploader/admin-only editing, replacement, publication, and deletion.
+- Enhancement Requests where authorized customers submit ideas and like requests, with administrator-managed statuses and one shared status note per request.
 - The Camera Hacks Workshop visual style: charcoal surfaces, orange-red accents, the stacked wordmark, and locally hosted Hanken Grotesk / Space Mono fonts. The sign-in, library, and admin screens share the same responsive styling; font licences ship with the site.
 - The personal-use software and design license appears above the file list. An unchecked agreement box blocks downloads until selected; every download request also validates the current license version and records consent on the server.
 - Admin pages to import up to 10,000 customer emails from CSV or a pasted list, review invalid rows and duplicates, record purchase sources, revoke/restore access, and view an activity log.
@@ -85,6 +86,16 @@ Interrupted uploads remain visible to the uploader and admins. Choose **Verify u
 
 Deploy this feature with **Functions, Hosting, Storage rules, and Firestore indexes**, not Hosting alone. No new Firebase service or external account is required. See [deployment instructions](docs/DEPLOYMENT.md#community-builds-upgrade).
 
+## Enhancement Requests
+
+Open **Enhancement Requests → Submit a request** and enter a title and description. New requests start at **Pending Review**. Every authorized customer can see requests and like or unlike them, with one like per account per request. Account emails and the identities of other submitters and likers stay private.
+
+Sort by **Newest first** or **Most liked**. Search and status filters apply to the requests already loaded; **Load more requests** fetches the next page of up to 50.
+
+Administrators have **Update status & note** on each request. The available statuses are **Pending Review**, **Approved**, **Not Approved**, **Pending Development**, **In Development**, **Testing**, and **Live**. The single **Status note** is visible to all authorized customers. Saving replaces the current note; clearing the field removes it. This is not a customer comment thread. If another administrator updates a review while a form is open, refresh and review their changes before saving again.
+
+Deploy this update with **Functions and Hosting**. It uses the existing Firestore database and automatic single-field indexes; no new service, rules change, or composite index is required. See [deployment instructions](docs/DEPLOYMENT.md#enhancement-requests-upgrade).
+
 ## Verification
 
 ```bash
@@ -92,6 +103,6 @@ npm test
 npm run test:emulators
 ```
 
-The unit suite covers customer list parsing, validation, large imports, interrupted batches, safe retries, and explicit acceptance of the current download license. The emulator suite exercises actual email links, callable Functions, Firestore rules, and cross-service Storage rules. It checks role boundaries, revoked sessions, draft visibility, upload validation, immutable objects, permanent-token removal, publication/removal, and license consent records. Build and test commands are also run by GitHub Actions.
+The unit suite covers customer list parsing, validation, large imports, interrupted batches, safe retries, request status validation, and explicit acceptance of the current download license. The emulator suite exercises actual email links, callable Functions, Firestore rules, and cross-service Storage rules. It checks role boundaries, revoked sessions, draft visibility, upload validation, immutable objects, permanent-token removal, publication/removal, and license consent records. Enhancement checks cover idempotent submissions and likes, all seven statuses, note replacement, stale review protection, private identities, pagination, and revoked access. Build and test commands are also run by GitHub Actions.
 
 See [docs/SECURITY.md](docs/SECURITY.md) for authorization, signing, and operating limits. Code dependency updates and billing monitoring are still needed; the architecture removes server administration, not all maintenance.

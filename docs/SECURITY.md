@@ -36,6 +36,16 @@ A replacement keeps the current file available while uploading, then atomically 
 
 All authorized customers may request a published community download. The owner/admin may also request their own private verified draft. Every request requires the current personal-use download license, records trusted consent, and returns a 60-second generation-pinned URL. Sharing permission is not a grant to redistribute the official library or third-party files; the upload form asks contributors to include only files they have permission to share.
 
+## Enhancement Requests
+
+The callable Function handles all access to `enhancementRequests` and each request's `likes` subcollection. Every operation requires active membership and a valid sign-in time. Direct client reads and writes remain denied by the existing Firestore rules. Only active administrators may update a request's status and single status note; customer-supplied roles are ignored, and administrative access is rechecked inside the update transaction.
+
+Submissions allowlist a title of up to 120 characters and description of up to 5,000 characters. The server sets the creator UID, creation time, zero likes, empty note, and initial **Pending Review** status. One random request ID is reused for submission retries; the same authenticated author and unchanged content return the existing request without resetting its status, note, or likes. Other accounts cannot reuse that ID to overwrite it.
+
+Each like is keyed by the authenticated UID. A transaction creates or deletes that account's like and updates the count atomically. Calls specify the desired like state, so duplicate requests and retries cannot add extra votes. Membership is rechecked inside the transaction. Review updates accept only the seven configured statuses and a note of up to 5,000 characters. A review version prevents stale forms from overwriting another administrator's update; likes do not change this review version.
+
+Lists return at most 50 requests per page, including only display fields, counts, and the caller's own like/ownership flags. They omit creator UIDs, email addresses, and liker identities. Newest and most-liked lists use single-field sorting; search and status filtering are limited to loaded results. Titles, descriptions, and notes are escaped as plain text in the browser. Submission and review actions are recorded in the private administrator activity log. There is one current status note, with no customer comment thread.
+
 ## Hosting and operations
 
 Firebase Hosting serves HTTPS and security headers including CSP, no-referrer, anti-framing, and MIME-sniffing protection. The client uses bearer tokens for callable requests; there is no cookie-based custom action endpoint requiring a separate CSRF token. Firebase callable validation verifies ID tokens, and application authorization checks the allowlist. No cloud private keys or admin credentials are bundled into the browser.

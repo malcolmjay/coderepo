@@ -6,6 +6,7 @@ import { uploadFile } from "./file-upload";
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../functions/src/upload-config.js";
 import { DOWNLOAD_LICENSE } from "../functions/src/download-license.js";
 import {communityPage} from "./community";
+import {enhancementsPage} from "./enhancements";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
@@ -56,7 +57,7 @@ function busy(form: HTMLFormElement, value: boolean) {
 }
 
 function navigation() {
-  nav.innerHTML = session ? `<a href="#downloads"><span class="nav-index" aria-hidden="true">01 /</span>Downloads</a><a href="#community"><span class="nav-index" aria-hidden="true">02 /</span>Community Builds</a>${session.role === "admin" ? '<a href="#customers"><span class="nav-index" aria-hidden="true">03 /</span>Admin</a>' : ""}<button class="link-button" id="signout"><span class="nav-index" aria-hidden="true">${session.role === "admin" ? "04" : "03"} /</span>Sign out</button>` : '<span class="header-label">CUSTOMER DOWNLOADS</span>';
+  nav.innerHTML = session ? `<a href="#downloads"><span class="nav-index" aria-hidden="true">01 /</span>Downloads</a><a href="#community"><span class="nav-index" aria-hidden="true">02 /</span>Community Builds</a><a href="#enhancements"><span class="nav-index" aria-hidden="true">03 /</span>Enhancement Requests</a>${session.role === "admin" ? '<a href="#customers"><span class="nav-index" aria-hidden="true">04 /</span>Admin</a>' : ""}<button class="link-button" id="signout"><span class="nav-index" aria-hidden="true">${session.role === "admin" ? "05" : "04"} /</span>Sign out</button>` : '<span class="header-label">CUSTOMER DOWNLOADS</span>';
   document.querySelector("#signout")?.addEventListener("click", () => {void client.auth.signOut();});
 }
 
@@ -274,7 +275,7 @@ async function customersPage(token: number) {
 
 async function activityPage(token: number) {
   const first = await client.api<Page<Event>>("activity"); if (token !== navigating) return;
-  main.innerHTML = heading("Recent activity.", "Customer access, releases, and community contributions.") + adminNav("activity") + '<div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Recent activity"><table><thead><tr><th>Date</th><th>Action</th><th>Details</th><th>Account</th></tr></thead><tbody id="events"></tbody></table></div><button id="more" class="button secondary load-more">Load more activity</button>';
+  main.innerHTML = heading("Recent activity.", "Customer access, releases, community builds, and enhancement requests.") + adminNav("activity") + '<div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Recent activity"><table><thead><tr><th>Date</th><th>Action</th><th>Details</th><th>Account</th></tr></thead><tbody id="events"></tbody></table></div><button id="more" class="button secondary load-more">Load more activity</button>';
   const append = (items: Event[]) => document.querySelector("#events")!.insertAdjacentHTML("beforeend", items.map(item => `<tr><td>${esc(new Date(item.createdAt).toLocaleString())}</td><td>${esc(item.action)}</td><td>${esc(item.target)}</td><td>${esc(item.actor)}</td></tr>`).join(""));
   append(first.items); if (!first.items.length) document.querySelector("#events")!.innerHTML = '<tr><td colspan="4">No activity yet.</td></tr>';
   let cursor = first.next; const button = document.querySelector<HTMLButtonElement>("#more")!; button.hidden = !cursor;
@@ -288,12 +289,14 @@ async function route() {
   try {
     const page = location.hash.slice(1);
     const community = ["community", "community-mine", "community-manage"].includes(page);
+    const enhancements = page === "enhancements";
     const adminPage = ["customers", "releases", "activity"].includes(page);
     nav.querySelectorAll<HTMLAnchorElement>("a").forEach(link => {
-      const active = link.hash === "#community" ? community : link.hash === "#customers" ? adminPage : !adminPage && !community;
+      const active = link.hash === "#enhancements" ? enhancements : link.hash === "#community" ? community : link.hash === "#customers" ? adminPage : !adminPage && !community && !enhancements;
       if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
     });
-    if (community) await communityPage(main, page === "community-mine" ? "mine" : page === "community-manage" && session.role === "admin" ? "manage" : "all", {
+    if (enhancements) await enhancementsPage(main, {api: client.api, admin: session.role === "admin", heading, notice, error: errorMessage, isCurrent: () => token === navigating});
+    else if (community) await communityPage(main, page === "community-mine" ? "mine" : page === "community-manage" && session.role === "admin" ? "manage" : "all", {
       api: client.api, storage: client.storage, admin: session.role === "admin", heading, licensePanel: downloadLicensePanel,
       notice, error: errorMessage, download, refresh: route, isCurrent: () => token === navigating,
       setUploading: value => {if (value) uploadPage = location.hash; uploading = value;},
@@ -302,7 +305,7 @@ async function route() {
     else if (session.role === "admin" && page === "releases") await releasesPage(true, token);
     else if (session.role === "admin" && page === "activity") await activityPage(token);
     else await releasesPage(false, token);
-    document.title = `${community ? "Community Builds" : session.role === "admin" && adminPage ? "Admin" : "Downloads"} · Camera Hacks`;
+    document.title = `${enhancements ? "Enhancement Requests" : community ? "Community Builds" : session.role === "admin" && adminPage ? "Admin" : "Downloads"} · Camera Hacks`;
   } catch (error) {
     if (token !== navigating) return;
     const code = (error as {code?: string}).code;

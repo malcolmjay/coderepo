@@ -125,3 +125,18 @@ npx -y firebase-tools@latest deploy --project camera-hacks --only firestore,stor
 This update changes the callable Function, Storage rules, Hosting app, and adds two Firestore indexes for published and owner-filtered community lists. Deploy all four targets together. Wait for the new `communityBuilds` indexes to finish building before testing these lists. There is no database migration, new Firebase service, or external account to configure.
 
 Verify with two authorized customer accounts and one administrator: upload a small STL/ZIP as the first customer, review the private draft, publish it, accept the license and download it as the second customer. The second customer must not see editing controls or private drafts. Check that the owner and administrator can edit, replace, unpublish, and delete the test build, and that a replacement requires publishing again. Existing official Downloads and Admin release uploads should continue to work. Use test files you own, not customer payloads.
+
+## Enhancement Requests upgrade
+
+From the existing authenticated Cloud Shell checkout, with Community Builds already deployed:
+
+```bash
+cd ~/camera-hacks-portal
+git pull --ff-only
+npm run build
+npx -y firebase-tools@latest deploy --project camera-hacks --only functions,hosting
+```
+
+Deploy both targets together. This feature adds operations to the existing callable Function and a portal section backed by the existing Firestore database. There is no migration, new Firebase service, security-rules change, or new composite index to configure. The first submission creates its request record automatically. GitHub checks do not deploy the application.
+
+After deployment, submit a test idea as a customer and confirm it starts at **Pending Review**. Like and unlike it from two authorized accounts and check that each account contributes at most one like. Customers must not see **Update status & note**. As an administrator, change the status, add a note, and confirm another customer can see the saved review after refreshing. Replace and clear the note to verify that only one current note is shown. Check sorting, loaded-request filters, and the existing Downloads and Community Builds sections.

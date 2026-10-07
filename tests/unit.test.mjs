@@ -73,3 +73,23 @@ test('community input allowlists metadata, bounds uploads, and requires explicit
   assert.throws(() => assertSharing({sharingAccepted: true, sharingVersion: 'stale'}));
   assert.doesNotThrow(() => assertSharing({sharingAccepted: true, sharingVersion: COMMUNITY_SHARING.version}));
 });
+
+test('enhancement input accepts only title/description and bounded request IDs', async () => {
+  const {enhancementFields, enhancementId} = await import('../functions/lib/enhancement-domain.js');
+  const fields = {title: ' Better focus peaking ', description: 'Choose a peaking colour.'};
+  assert.deepEqual(enhancementFields({...fields, createdBy: 'forged', status: 'Live', statusNote: 'Forged', likeCount: 100}), {title: 'Better focus peaking', description: fields.description});
+  for (const value of ['', '../private', 'a'.repeat(33), null]) assert.throws(() => enhancementId(value));
+  assert.equal(enhancementId('a'.repeat(32)), 'a'.repeat(32));
+  assert.throws(() => enhancementFields({...fields, title: ' '}));
+  assert.throws(() => enhancementFields({...fields, description: 'x'.repeat(5001)}));
+});
+test('enhancement reviews accept exactly the seven requested statuses and one bounded note', async () => {
+  const {enhancementReview} = await import('../functions/lib/enhancement-domain.js');
+  const {ENHANCEMENT_STATUSES} = await import('../functions/lib/enhancement-config.js');
+  assert.deepEqual(ENHANCEMENT_STATUSES, ['Pending Review', 'Approved', 'Not Approved', 'Pending Development', 'In Development', 'Testing', 'Live']);
+  for (const status of ENHANCEMENT_STATUSES) assert.deepEqual(enhancementReview({status, statusNote: ' Current note ', reviewVersion: 0, likeCount: 999}), {status, statusNote: 'Current note', reviewVersion: 0});
+  for (const status of ['', 'approved', 'Complete', null]) assert.throws(() => enhancementReview({status, reviewVersion: 0}));
+  for (const reviewVersion of [undefined, -1, '0', 0.5]) assert.throws(() => enhancementReview({status: 'Approved', reviewVersion}));
+  assert.throws(() => enhancementReview({status: 'Approved', reviewVersion: 0, statusNote: 'x'.repeat(5001)}));
+  assert.equal(enhancementReview({status: 'Live', reviewVersion: 1, statusNote: ''}).statusNote, '');
+});

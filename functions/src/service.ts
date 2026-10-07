@@ -4,6 +4,7 @@ import { getStorage } from "firebase-admin/storage";
 import { assertAccess, assertDownloadLicense, bulkEmails, email, filename, PortalError, releaseFields, releaseId, text, uploadSize, type Identity, type Member } from "./domain.js";
 import { DOWNLOAD_LICENSE } from "./download-license.js";
 import {COMMUNITY_OPERATIONS, communityDispatch} from "./community-service.js";
+import {ENHANCEMENT_CUSTOMER_OPERATIONS, ENHANCEMENT_OPERATIONS, enhancementDispatch} from "./enhancement-service.js";
 
 const db = () => getFirestore();
 const memberRef = (value: string) => db().collection("members").doc(value);
@@ -44,11 +45,12 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new PortalError("invalid-argument", "Invalid request.");
   const data = input as Record<string, unknown>;
   const operation = text(data.operation, "operation", 40);
-  const customerOperations = new Set(["access", "releases", "download", ...COMMUNITY_OPERATIONS]);
+  const customerOperations = new Set(["access", "releases", "download", ...COMMUNITY_OPERATIONS, ...ENHANCEMENT_CUSTOMER_OPERATIONS]);
   const {ref, member} = await access(identity, !customerOperations.has(operation) || data.admin === true);
   const user = identity!;
 
   if (COMMUNITY_OPERATIONS.has(operation)) return communityDispatch(operation, data, user, member, ref);
+  if (ENHANCEMENT_OPERATIONS.has(operation)) return enhancementDispatch(operation, data, user, ref);
 
   if (operation === "access") return {email: member.email, role: member.role};
 
