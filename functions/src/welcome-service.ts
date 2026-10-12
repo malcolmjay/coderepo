@@ -1,7 +1,6 @@
-import {createHash, randomUUID} from "node:crypto";
+import {randomUUID} from "node:crypto";
 import {getFirestore, type DocumentData} from "firebase-admin/firestore";
 import {email} from "./domain.js";
-import {welcomeMessage} from "./welcome-template.js";
 
 export const WELCOME_LEASE_MS = 5 * 60_000;
 export const welcomeRef = (address: string) => getFirestore().collection("welcomeEmails").doc(email(address));
@@ -16,9 +15,9 @@ export function welcomeSummary(data: DocumentData | undefined, now = Date.now())
 }
 
 export class WelcomeSendError extends Error {
-  constructor(public readonly reason: "setup" | "rejected" | "uncertain") {super("Welcome email could not be confirmed.");}
+  constructor(public readonly reason: "setup" | "rejected" | "uncertain" | "quota") {super("Sign-in invitation could not be confirmed.");}
 }
-export type WelcomeSender = (message: {to: string; id: string; subject: string; text: string; html: string}) => Promise<void>;
+export type WelcomeSender = (message: {to: string}) => Promise<void>;
 
 /** Firestore events can be duplicated or arrive out of order. Only one claim sends. */
 export async function deliverWelcome(address: string, revision: number, send: WelcomeSender) {
@@ -30,7 +29,7 @@ export async function deliverWelcome(address: string, revision: number, send: We
     if (!data || data.revision !== revision || !["queued", "sending"].includes(data.status)) return null;
     if (data.status === "sending") {
       if (Date.now() - data.updatedAt < WELCOME_LEASE_MS) throw new Error("Welcome delivery already in progress.");
-      // SMTP has no exactly-once contract. A crashed worker may have sent it;
+      // Email requests have no exactly-once contract. A crashed worker may have sent it;
       // require an explicit admin decision instead of silently sending twice.
       tx.update(ref, {status: "uncertain", error: "uncertain", updatedAt: Date.now()});
       return null;
@@ -41,18 +40,18 @@ export async function deliverWelcome(address: string, revision: number, send: We
       return null;
     }
     tx.update(ref, {status: "sending", claim, attempts: data.attempts + 1, error: null, updatedAt: Date.now()});
-    return {id: createHash("sha256").update(`${ref.id}:${data.memberCreatedAt}`).digest("hex")};
+    return true;
   });
   if (!claimed) return;
   let outcome: DocumentData;
   try {
-    await send({to: ref.id, id: claimed.id, ...welcomeMessage(ref.id)});
+    await send({to: ref.id});
     outcome = {status: "sent", error: null, sentAt: Date.now()};
   } catch (error) {
     const reason = error instanceof WelcomeSendError ? error.reason : "uncertain";
     outcome = {status: reason === "uncertain" ? "uncertain" : "failed", error: reason};
   }
-  // If this write fails after SMTP acceptance, the retried event sees the claim
+  // If this write fails after Firebase acceptance, the retried event sees the claim
   // and eventually marks it uncertain. It does not send another copy.
   await db.runTransaction(async tx => {
     const current = await tx.get(ref);

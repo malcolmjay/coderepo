@@ -48,7 +48,7 @@ export function releaseFields(data: Record<string, unknown>) {
 }
 
 export interface Identity { uid: string; email?: unknown; email_verified?: unknown; auth_time?: unknown; }
-export interface Member { email: string; role: "admin" | "customer"; active: boolean; validAfter: number; source: string; createdAt: number; updatedAt: number; }
+export interface Member { email: string; role: "admin" | "customer"; active: boolean; validAfter: number; source: string; createdAt: number; updatedAt: number; welcomePending?: boolean; }
 
 export function assertAccess(identity: Identity | undefined, member: Member | undefined, admin = false): Member {
   if (!identity || identity.email_verified !== true || typeof identity.auth_time !== "number") {

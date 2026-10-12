@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase-admin/app";
+import { initializeApp, getApp } from "firebase-admin/app";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { logger } from "firebase-functions";
@@ -6,9 +6,8 @@ import { dispatch } from "./service.js";
 import { PortalError } from "./domain.js";
 import { VERIFICATION_TIMEOUT_SECONDS } from "./upload-config.js";
 import {onDocumentWritten} from "firebase-functions/v2/firestore";
-import {defineSecret} from "firebase-functions/params";
 import {deliverWelcome} from "./welcome-service.js";
-import {smtpWelcomeSender} from "./welcome-smtp.js";
+import {firebaseWelcomeSender} from "./welcome-firebase.js";
 
 initializeApp();
 setGlobalOptions({region: "northamerica-northeast1", maxInstances: 5, memory: "256MiB", timeoutSeconds: VERIFICATION_TIMEOUT_SECONDS});
@@ -26,21 +25,22 @@ export const portal = onCall(async request => {
   }
 });
 
-const welcomeConfig = defineSecret("WELCOME_EMAIL_CONFIG");
 const emulated = process.env.FUNCTIONS_EMULATOR === "true";
+let invitationSender: ReturnType<typeof firebaseWelcomeSender> | undefined;
 
 export const sendWelcomeEmail = onDocumentWritten({
   document: "welcomeEmails/{email}", database: "(default)",
-  secrets: emulated ? [] : [welcomeConfig], retry: true,
+  retry: true,
   maxInstances: 2, concurrency: 1, timeoutSeconds: 120,
 }, async event => {
-  // Local development and CI never send mail or load production SMTP secrets.
+  // Local development and CI never send real mail.
   // Emulator tests exercise deliverWelcome directly with an injected sender.
   if (emulated) return;
   const after = event.data?.after.data();
   if (!after || after.status !== "queued") return;
   try {
-    await deliverWelcome(event.params.email, after.revision, smtpWelcomeSender(() => welcomeConfig.value()));
+    invitationSender ??= firebaseWelcomeSender(getApp().options.projectId ?? process.env.GCLOUD_PROJECT ?? "");
+    await deliverWelcome(event.params.email, after.revision, invitationSender);
   } catch {
     // A generic error requests Eventarc redelivery without logging customer data.
     throw new Error("Welcome delivery will be retried.");

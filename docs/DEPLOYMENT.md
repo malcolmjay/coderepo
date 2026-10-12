@@ -1,6 +1,6 @@
 # Deploy the Firebase portal
 
-The portal and welcome-email worker run in the same Firebase / Google Cloud project. Firebase sends sign-in links; the custom welcome worker uses your configured SMTP provider. The website remains backed by this GitHub repository.
+The portal and invitation worker run in the same Firebase / Google Cloud project. Firebase sends both sign-in links and automatic customer invitations from the existing Authentication sender. No SMTP provider is required. The website remains backed by this GitHub repository.
 
 ## 1. Create the project
 
@@ -18,7 +18,7 @@ In Authentication settings:
 
 - Authorize the production Hosting domain, normally `YOUR_PROJECT_ID.web.app`. Add your custom portal domain later if using one.
 - Keep email enumeration protection enabled. Review email quotas for your plan before inviting all customers at once.
-- Use Firebase's managed sign-in email sender. Customize the sender display name/template within the options Firebase provides. Separately, configure the custom welcome-email sender using [WELCOME_EMAIL.md](WELCOME_EMAIL.md).
+- Use Firebase's managed sign-in email sender. Customize the sender display name/template within the options Firebase provides. Automatic invitations use this same sender and template. See [WELCOME_EMAIL.md](WELCOME_EMAIL.md).
 - Do not authorize localhost on the production project. Local development uses the Auth emulator instead.
 
 The continue URL is the portal origin. Links opened on another device ask the customer to type the receiving email again; no email address is placed in the link's redirect parameters.
@@ -33,11 +33,10 @@ npm --prefix functions ci
 npx -y firebase-tools@latest login
 npx -y firebase-tools@latest use --add
 npm run build
-node scripts/configure-welcome-email.mjs --project YOUR_PROJECT_ID
 npx -y firebase-tools@latest deploy --only firestore,storage,functions,hosting
 ```
 
-Select the new project for the default alias. `.firebaserc` is local and ignored by git. In a pre-authenticated Google Cloud Shell, skip `login` and use `--project camera-hacks` on Firebase commands instead of selecting a local alias. The deploy publishes Hosting, the callable Function, the welcome-email worker, Firestore rules/indexes, and Storage rules. Before the first deployment with the worker, configure `WELCOME_EMAIL_CONFIG`; [welcome-email setup](WELCOME_EMAIL.md) also explains the explicit disabled configuration if SMTP is not ready. The Firebase CLI will request enabling necessary Google APIs and may request an Artifact Registry cleanup policy; a short retention period avoids storing old build images indefinitely.
+Select the new project for the default alias. `.firebaserc` is local and ignored by git. In a pre-authenticated Google Cloud Shell, skip `login` and use `--project camera-hacks` on Firebase commands instead of selecting a local alias. The deploy publishes Hosting, the callable Function, the invitation worker, Firestore rules/indexes, and Storage rules. No SMTP secret or mail-provider setup is needed; the worker reads the same public Hosting configuration as the portal. The Firebase CLI will request enabling necessary Google APIs and may request an Artifact Registry cleanup policy; a short retention period avoids storing old build images indefinitely.
 
 **Accept the Storage-to-Firestore rules permission when prompted.** Storage upload rules read two documents from Firestore: the membership and the draft release or community build. The Storage service agent needs the Firebase-provided cross-service rules permission for this to work. If the prompt is missed, redeploy Storage rules and follow [Firebase's cross-service rules instructions](https://firebase.google.com/docs/storage/security/rules-conditions#enhance_with_firestore).
 
@@ -91,7 +90,7 @@ To revoke another administrator, use the same command with `--revoke`. The scrip
 Use your own test mailbox and a harmless test file before adding real customers:
 
 1. Verify the magic-link email arrives and signs you in. Test a second browser/device, and confirm a consumed link cannot be reused.
-2. Add a new test customer email you control. Refresh the admin list to confirm the welcome is accepted by the sender, check the real mailbox, and follow its portal link. Reimport the email and confirm no duplicate welcome. Sign in as that customer and confirm they cannot open admin data or directly read Firestore documents.
+2. Add a new test customer email you control. Refresh the admin list to confirm the invitation is accepted by Firebase, check the real mailbox, and use its sign-in link. Confirm the branded welcome appears after signing in, then dismiss it and verify it stays dismissed after another login. Reimport the email and confirm no duplicate invitation. Sign in as that customer and confirm they cannot open admin data or directly read Firestore documents.
 3. Upload a small draft. Confirm the customer cannot see/download it before publication. Publish it. On the customer file list, confirm the exact personal-use license is visible, the agreement checkbox starts unchecked, and all Download buttons are disabled. Check the box and download the exact bytes; uncheck it and confirm downloads are disabled again. Refresh and confirm acceptance resets. Repeat on the administrator's Test download controls. Confirm a **Download license accepted** entry appears in Admin → Activity. Calls without explicit consent or with an outdated license version must fail before a signed link is issued.
 4. Inspect the object metadata: there must be **no `firebaseStorageDownloadTokens` value** after verification. A raw Firebase object URL without authorization/token must fail.
 5. Confirm the signed download URL has a 60-second expiry and a `generation` parameter. After expiry, a new request using that URL must fail. A transfer already started may continue.

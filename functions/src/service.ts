@@ -46,14 +46,22 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new PortalError("invalid-argument", "Invalid request.");
   const data = input as Record<string, unknown>;
   const operation = text(data.operation, "operation", 40);
-  const customerOperations = new Set(["access", "releases", "download", ...COMMUNITY_OPERATIONS, ...ENHANCEMENT_CUSTOMER_OPERATIONS]);
+  const customerOperations = new Set(["access", "dismissWelcome", "releases", "download", ...COMMUNITY_OPERATIONS, ...ENHANCEMENT_CUSTOMER_OPERATIONS]);
   const {ref, member} = await access(identity, !customerOperations.has(operation) || data.admin === true);
   const user = identity!;
 
   if (COMMUNITY_OPERATIONS.has(operation)) return communityDispatch(operation, data, user, member, ref);
   if (ENHANCEMENT_OPERATIONS.has(operation)) return enhancementDispatch(operation, data, user, ref);
 
-  if (operation === "access") return {email: member.email, role: member.role};
+  if (operation === "access") return {email: member.email, role: member.role, welcomePending: member.role === "customer" && member.welcomePending === true};
+
+  if (operation === "dismissWelcome") {
+    await db().runTransaction(async tx => {
+      const current = assertAccess(user, (await tx.get(ref)).data() as Member | undefined);
+      if (current.welcomePending === true) tx.update(ref, {welcomePending: false});
+    });
+    return {ok: true};
+  }
 
   if (operation === "releases") {
     const admin = data.admin === true;
@@ -84,7 +92,7 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
       for (const snapshot of snapshots) {
         if (snapshot.exists) continue; // Bulk import must never silently restore a revoked customer.
         const stamp = now();
-        tx.create(snapshot.ref, {email: snapshot.id, source, role: "customer", active: true, validAfter: 0, createdAt: stamp, updatedAt: stamp});
+        tx.create(snapshot.ref, {email: snapshot.id, source, role: "customer", active: true, validAfter: 0, welcomePending: true, createdAt: stamp, updatedAt: stamp});
         tx.create(welcomeRef(snapshot.id), newWelcome(stamp));
         added++;
       }
@@ -99,16 +107,16 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
     return db().runTransaction(async tx => {
       await authorizeTransaction(tx, ref, user);
       const [customer, welcome] = await tx.getAll(target, job);
-      if (!customer.exists || !welcome.exists) throw new PortalError("not-found", "No welcome email was queued for this customer.");
-      if (customer.get("role") !== "customer" || customer.get("active") !== true) throw new PortalError("failed-precondition", "Only an active customer can receive a welcome email.");
+      if (!customer.exists || !welcome.exists) throw new PortalError("not-found", "No sign-in invitation was queued for this customer.");
+      if (customer.get("role") !== "customer" || customer.get("active") !== true) throw new PortalError("failed-precondition", "Only an active customer can receive a sign-in invitation.");
       const current = welcome.data()!;
       // Replaying a successful retry request must not queue another email.
       if (Number(data.revision) < current.revision) return {ok: true};
       const summary = welcomeSummary(current)!;
       if (data.revision !== current.revision || !summary.canRetry) throw new PortalError("failed-precondition", "This email is already queued, sending, or sent. Refresh the customer list.");
-      if (summary.status === "uncertain" && data.confirmUncertain !== true) throw new PortalError("failed-precondition", "Delivery could not be confirmed. Check the mail provider before retrying; the customer may receive a duplicate.");
+      if (summary.status === "uncertain" && data.confirmUncertain !== true) throw new PortalError("failed-precondition", "Delivery could not be confirmed. Check whether the customer received their invitation before retrying; they may receive another sign-in link.");
       tx.update(job, {status: "queued", revision: current.revision + 1, error: null, updatedAt: now()});
-      tx.create(auditRef(), activity(member.email, "Welcome email retried", address));
+      tx.create(auditRef(), activity(member.email, "Sign-in invitation retried", address));
       return {ok: true};
     });
   }

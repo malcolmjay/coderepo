@@ -10,6 +10,7 @@ import {doc, getDoc, setDoc, deleteDoc} from 'firebase/firestore';
 import {ref, uploadBytes, getBytes, getMetadata, updateMetadata, deleteObject} from 'firebase/storage';
 import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
 import {deliverWelcome, WelcomeSendError, WELCOME_LEASE_MS} from '../functions/lib/welcome-service.js';
+import {firebaseWelcomeSender} from '../functions/lib/welcome-firebase.js';
 
 const projectId = 'demo-camera-portal';
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Run tests with npm run test:emulators.');
@@ -572,8 +573,7 @@ test('welcome worker claims once across concurrent event delivery and ignores co
   const entered = new Promise(resolve => {started = resolve;});
   const unblock = new Promise(resolve => {finish = resolve;});
   const sender = async message => {
-    sends++; assert.equal(message.to, address); assert(message.text.includes(address));
-    assert.match(message.id, /^[a-f0-9]{64}$/); started(); await unblock;
+    sends++; assert.deepEqual(message, {to: address}); started(); await unblock;
   };
   const first = deliverWelcome(address, 0, sender);
   await entered;
@@ -584,7 +584,7 @@ test('welcome worker claims once across concurrent event delivery and ignores co
   assert.equal(job.status, 'sent'); assert.equal(job.attempts, 1); assert.equal(sends, 1); assert(job.sentAt);
   await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
 });
-test('welcome SMTP failure preserves customer access and exposes only sanitized admin status', async () => {
+test('Firebase invitation failure preserves customer access and exposes only sanitized admin status', async () => {
   const address = 'aaa-welcome-failure@example.com';
   await call(owner, 'addCustomers', {emails: address});
   await deliverWelcome(address, 0, async () => {throw new WelcomeSendError('setup');});
@@ -609,19 +609,19 @@ test('only current admins can retry a failed welcome and replaying the retry is 
   let sends = 0;
   await deliverWelcome(address, 0, async () => {sends++;});
   assert.equal(sends, 0, 'an old event cannot claim a later retry');
-  await deliverWelcome(address, 1, async message => {sends++; assert.equal(message.to, address); assert(!message.html.includes('forged'));});
+  await deliverWelcome(address, 1, async message => {sends++; assert.equal(message.to, address); assert.deepEqual(message, {to: address});});
   await call(owner, 'retryWelcomeEmail', payload);
   assert.equal((await job.get()).get('status'), 'sent'); assert.equal(sends, 1);
-  const events = await db.collection('activity').where('action', '==', 'Welcome email retried').get();
+  const events = await db.collection('activity').where('action', '==', 'Sign-in invitation retried').get();
   assert.equal(events.docs.filter(event => event.get('target') === address).length, 1);
 });
 test('ambiguous delivery needs explicit confirmation; stale sending claims do not automatically resend', async () => {
   const address = 'welcome-uncertain@example.com';
   await call(owner, 'addCustomers', {emails: address});
-  await deliverWelcome(address, 0, async () => {throw new Error('private SMTP response or credential');});
+  await deliverWelcome(address, 0, async () => {throw new Error('private Firebase response or credential');});
   const ref = db.doc(`welcomeEmails/${address}`);
   assert.equal((await ref.get()).get('status'), 'uncertain');
-  assert(!JSON.stringify((await ref.get()).data()).includes('private SMTP'));
+  assert(!JSON.stringify((await ref.get()).data()).includes('private Firebase'));
   await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
   await call(owner, 'retryWelcomeEmail', {email: address, revision: 0, confirmUncertain: true});
   await ref.update({status: 'sending', claim: 'crashed-worker', updatedAt: Date.now() - WELCOME_LEASE_MS - 1000});
@@ -651,4 +651,48 @@ test('direct clients cannot inspect welcome jobs, inject mail, or mark a message
     await assertFails(setDoc(target, {status: 'sent'}, {merge: true}));
     await assertFails(deleteDoc(target));
   }
+});
+
+test('Firebase invitation completes real emulator sign-in and the welcome dismissal persists for only that customer', async () => {
+  const address = 'firebase-invited@example.com';
+  await call(owner, 'addCustomers', {emails: address});
+  assert.equal((await db.doc(`members/${address}`).get()).get('welcomePending'), true);
+  let sends = 0;
+  const sender = firebaseWelcomeSender(projectId, async (url, options) => {
+    if (url === `https://${projectId}.web.app/__/firebase/init.json`) return new Response(JSON.stringify({projectId, apiKey: 'demo-key'}), {status: 200});
+    assert.equal(url, 'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=demo-key');
+    const payload = JSON.parse(options.body);
+    assert.equal(payload.requestType, 'EMAIL_SIGNIN'); assert.equal(payload.email, address);
+    assert.equal(payload.continueUrl, `https://${projectId}.web.app/`);
+    assert.equal(payload.returnOobLink, undefined); assert.equal(payload.html, undefined);
+    sends++;
+    return fetch('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=demo-key', options);
+  });
+  await deliverWelcome(address, 0, sender);
+  await deliverWelcome(address, 0, sender);
+  assert.equal(sends, 1);
+  assert.equal((await db.doc(`welcomeEmails/${address}`).get()).get('status'), 'sent');
+  const {oobCodes} = await (await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`)).json();
+  const invitation = oobCodes.filter(item => item.email === address && item.requestType === 'EMAIL_SIGNIN').at(-1);
+  assert(invitation);
+  const auth = await json('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=demo-key', {email: address, oobCode: invitation.oobCode});
+  assert(auth.idToken, JSON.stringify(auth));
+  const invited = {token: auth.idToken, uid: auth.localId, email: address};
+  assert.equal((await call(invited, 'access')).welcomePending, true);
+  const before = (await db.doc('members/welcome-new@example.com').get()).data();
+  await call(invited, 'dismissWelcome', {email: 'welcome-new@example.com', role: 'admin', active: false});
+  await call(invited, 'dismissWelcome');
+  assert.equal((await call(invited, 'access')).welcomePending, false);
+  assert.deepEqual((await db.doc('members/welcome-new@example.com').get()).data(), before);
+  const member = (await db.doc(`members/${address}`).get()).data();
+  assert.equal(member.active, true); assert.equal(member.role, 'customer');
+  assert.equal((await call(await login(address), 'access')).welcomePending, false, 'dismissal survives a fresh session');
+  assert.equal((await call(owner, 'access')).welcomePending, false);
+  assert.equal((await call(customer, 'access')).welcomePending, false, 'existing customers are not backfilled');
+  assert(!JSON.stringify((await db.doc(`welcomeEmails/${address}`).get()).data()).includes(invitation.oobCode));
+});
+test('unapproved, unauthenticated, and revoked sessions cannot dismiss another customer welcome', async () => {
+  for (const user of [stranger, revoked]) await denied(call(user, 'dismissWelcome', {email: 'welcome-new@example.com'}));
+  await denied(call(null, 'dismissWelcome', {email: 'welcome-new@example.com'}), 'UNAUTHENTICATED');
+  assert.equal((await db.doc('members/welcome-new@example.com').get()).get('welcomePending'), true);
 });
