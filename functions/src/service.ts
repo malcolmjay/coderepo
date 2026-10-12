@@ -5,6 +5,7 @@ import { assertAccess, assertDownloadLicense, bulkEmails, email, filename, Porta
 import { DOWNLOAD_LICENSE } from "./download-license.js";
 import {COMMUNITY_OPERATIONS, communityDispatch} from "./community-service.js";
 import {ENHANCEMENT_CUSTOMER_OPERATIONS, ENHANCEMENT_OPERATIONS, enhancementDispatch} from "./enhancement-service.js";
+import {newWelcome, welcomeRef, welcomeSummary} from "./welcome-service.js";
 
 const db = () => getFirestore();
 const memberRef = (value: string) => db().collection("members").doc(value);
@@ -64,7 +65,8 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
 
   if (operation === "customers") {
     const result = await page(db().collection("members").orderBy("email"), "members", data.cursor, 100);
-    return {items: result.docs.map(doc => doc.data()), next: result.next};
+    const welcomes = result.docs.length ? await db().getAll(...result.docs.map(doc => welcomeRef(doc.id))) : [];
+    return {items: result.docs.map((doc, index) => ({...doc.data(), welcome: welcomeSummary(welcomes[index].data())})), next: result.next};
   }
 
   if (operation === "activity") {
@@ -83,10 +85,31 @@ export async function dispatch(identity: Identity | undefined, input: unknown): 
         if (snapshot.exists) continue; // Bulk import must never silently restore a revoked customer.
         const stamp = now();
         tx.create(snapshot.ref, {email: snapshot.id, source, role: "customer", active: true, validAfter: 0, createdAt: stamp, updatedAt: stamp});
+        tx.create(welcomeRef(snapshot.id), newWelcome(stamp));
         added++;
       }
       tx.create(auditRef(), activity(member.email, "Customers added", `${added} added; ${addresses.length - added} unchanged`));
       return {added, skipped: addresses.length - added};
+    });
+  }
+
+  if (operation === "retryWelcomeEmail") {
+    const address = email(data.email), target = memberRef(address), job = welcomeRef(address);
+    if (!Number.isSafeInteger(data.revision) || Number(data.revision) < 0) throw new PortalError("invalid-argument", "Refresh the customer list and try again.");
+    return db().runTransaction(async tx => {
+      await authorizeTransaction(tx, ref, user);
+      const [customer, welcome] = await tx.getAll(target, job);
+      if (!customer.exists || !welcome.exists) throw new PortalError("not-found", "No welcome email was queued for this customer.");
+      if (customer.get("role") !== "customer" || customer.get("active") !== true) throw new PortalError("failed-precondition", "Only an active customer can receive a welcome email.");
+      const current = welcome.data()!;
+      // Replaying a successful retry request must not queue another email.
+      if (Number(data.revision) < current.revision) return {ok: true};
+      const summary = welcomeSummary(current)!;
+      if (data.revision !== current.revision || !summary.canRetry) throw new PortalError("failed-precondition", "This email is already queued, sending, or sent. Refresh the customer list.");
+      if (summary.status === "uncertain" && data.confirmUncertain !== true) throw new PortalError("failed-precondition", "Delivery could not be confirmed. Check the mail provider before retrying; the customer may receive a duplicate.");
+      tx.update(job, {status: "queued", revision: current.revision + 1, error: null, updatedAt: now()});
+      tx.create(auditRef(), activity(member.email, "Welcome email retried", address));
+      return {ok: true};
     });
   }
 

@@ -1,6 +1,7 @@
 import {after, before, test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
 import {initializeApp as initializeAdmin, deleteApp as deleteAdmin} from 'firebase-admin/app';
 import {getFirestore} from 'firebase-admin/firestore';
 import {getStorage as getAdminStorage} from 'firebase-admin/storage';
@@ -8,11 +9,14 @@ import {initializeTestEnvironment, assertFails, assertSucceeds} from '@firebase/
 import {doc, getDoc, setDoc, deleteDoc} from 'firebase/firestore';
 import {ref, uploadBytes, getBytes, getMetadata, updateMetadata, deleteObject} from 'firebase/storage';
 import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
+import {deliverWelcome, WelcomeSendError, WELCOME_LEASE_MS} from '../functions/lib/welcome-service.js';
 
 const projectId = 'demo-camera-portal';
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Run tests with npm run test:emulators.');
 const admin = initializeAdmin({projectId, storageBucket: `${projectId}.appspot.com`});
 const db = getFirestore(admin);
+const workerSdk = createRequire(new URL('../functions/package.json', import.meta.url))('firebase-admin/app');
+const workerAdmin = workerSdk.getApps()[0] ?? workerSdk.initializeApp({projectId});
 let env;
 let owner;
 let customer;
@@ -55,7 +59,7 @@ before(async () => {
   }
   owner = await login('admin@example.com'); customer = await login('customer@example.com'); stranger = await login('stranger@example.com'); revoked = await login('revoked@example.com');
 });
-after(async () => {await env?.cleanup(); await deleteAdmin(admin);});
+after(async () => {await env?.cleanup(); if (workerAdmin !== admin) await workerSdk.deleteApp(workerAdmin); await deleteAdmin(admin);});
 
 test('real email-link sign-in grants only approved emails portal access', async () => {
   assert.equal((await call(customer, 'access')).role, 'customer');
@@ -537,4 +541,114 @@ test('concurrent enhancement deletion, likes, reviews, and submission retries ca
   assert.equal((await db.doc(`deletedEnhancementRequests/${id}`).get()).exists, true);
   const audits = (await db.collection('activity').where('action', '==', 'Enhancement deleted').get()).docs.filter(doc => doc.get('requestId') === id);
   assert.equal(audits.length, 1);
+});
+
+test('customer creation atomically queues one welcome; concurrent reimports and access restores do not resend', async () => {
+  const results = await Promise.all(Array.from({length: 2}, () => call(owner, 'addCustomers', {emails: ' WELCOME-NEW@example.com, welcome-new@example.com\nrevoked@example.com', source: 'Shopify', html: 'forged', to: 'other@example.com'})));
+  assert.equal(results.reduce((total, item) => total + item.added, 0), 1);
+  const job = db.doc('welcomeEmails/welcome-new@example.com');
+  const initial = (await job.get()).data();
+  assert.equal(initial.status, 'queued'); assert.equal(initial.revision, 0); assert.equal(initial.attempts, 0);
+  assert.equal(initial.memberCreatedAt, (await db.doc('members/welcome-new@example.com').get()).get('createdAt'));
+  assert.equal(initial.html, undefined); assert.equal(initial.to, undefined);
+  assert.equal((await db.doc('welcomeEmails/revoked@example.com').get()).exists, false);
+  await call(owner, 'setAccess', {email: 'welcome-new@example.com', active: false});
+  await call(owner, 'setAccess', {email: 'welcome-new@example.com', active: true});
+  assert.deepEqual((await job.get()).data(), initial);
+});
+test('full 100-customer batch creates exactly 100 welcome jobs and reimport creates none', async () => {
+  const emails = Array.from({length: 100}, (_, i) => `welcome-batch-${i}@example.com`);
+  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n')}), {added: 100, skipped: 0});
+  const jobs = await db.getAll(...emails.map(address => db.doc(`welcomeEmails/${address}`)));
+  assert.equal(jobs.filter(job => job.exists && job.get('status') === 'queued').length, 100);
+  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n')}), {added: 0, skipped: 100});
+  const repeated = await db.getAll(...jobs.map(job => job.ref));
+  assert.deepEqual(repeated.map(job => job.data()), jobs.map(job => job.data()));
+});
+test('welcome worker claims once across concurrent event delivery and ignores completed event replays', async () => {
+  const address = 'welcome-once@example.com';
+  await call(owner, 'addCustomers', {emails: address});
+  let started, finish, sends = 0;
+  const entered = new Promise(resolve => {started = resolve;});
+  const unblock = new Promise(resolve => {finish = resolve;});
+  const sender = async message => {
+    sends++; assert.equal(message.to, address); assert(message.text.includes(address));
+    assert.match(message.id, /^[a-f0-9]{64}$/); started(); await unblock;
+  };
+  const first = deliverWelcome(address, 0, sender);
+  await entered;
+  await assert.rejects(deliverWelcome(address, 0, sender), /already in progress/);
+  finish(); await first;
+  await deliverWelcome(address, 0, sender);
+  const job = (await db.doc(`welcomeEmails/${address}`).get()).data();
+  assert.equal(job.status, 'sent'); assert.equal(job.attempts, 1); assert.equal(sends, 1); assert(job.sentAt);
+  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
+});
+test('welcome SMTP failure preserves customer access and exposes only sanitized admin status', async () => {
+  const address = 'aaa-welcome-failure@example.com';
+  await call(owner, 'addCustomers', {emails: address});
+  await deliverWelcome(address, 0, async () => {throw new WelcomeSendError('setup');});
+  const job = (await db.doc(`welcomeEmails/${address}`).get()).data();
+  assert.equal(job.status, 'failed'); assert.equal(job.error, 'setup');
+  assert.equal((await db.doc(`members/${address}`).get()).get('active'), true);
+  const listed = (await call(owner, 'customers')).items.find(item => item.email === address);
+  assert.equal(listed.welcome.error, 'setup'); assert.equal(listed.welcome.canRetry, true);
+  assert.equal(listed.welcome.claim, undefined); assert.equal(listed.welcome.memberCreatedAt, undefined);
+});
+test('only current admins can retry a failed welcome and replaying the retry is idempotent', async () => {
+  const address = 'welcome-retry@example.com';
+  await call(owner, 'addCustomers', {emails: address});
+  await deliverWelcome(address, 0, async () => {throw new WelcomeSendError('rejected');});
+  for (const account of [customer, stranger, revoked]) await denied(call(account, 'retryWelcomeEmail', {email: address, revision: 0}));
+  await denied(call(null, 'retryWelcomeEmail', {email: address, revision: 0}), 'UNAUTHENTICATED');
+  await denied(call(owner, 'retryWelcomeEmail', {email: 'customer@example.com', revision: 0}), 'NOT_FOUND');
+  const payload = {email: address, revision: 0, to: 'forged@example.com', html: '<b>forged</b>'};
+  await Promise.all([call(owner, 'retryWelcomeEmail', payload), call(owner, 'retryWelcomeEmail', payload)]);
+  const job = db.doc(`welcomeEmails/${address}`);
+  assert.equal((await job.get()).get('revision'), 1);
+  let sends = 0;
+  await deliverWelcome(address, 0, async () => {sends++;});
+  assert.equal(sends, 0, 'an old event cannot claim a later retry');
+  await deliverWelcome(address, 1, async message => {sends++; assert.equal(message.to, address); assert(!message.html.includes('forged'));});
+  await call(owner, 'retryWelcomeEmail', payload);
+  assert.equal((await job.get()).get('status'), 'sent'); assert.equal(sends, 1);
+  const events = await db.collection('activity').where('action', '==', 'Welcome email retried').get();
+  assert.equal(events.docs.filter(event => event.get('target') === address).length, 1);
+});
+test('ambiguous delivery needs explicit confirmation; stale sending claims do not automatically resend', async () => {
+  const address = 'welcome-uncertain@example.com';
+  await call(owner, 'addCustomers', {emails: address});
+  await deliverWelcome(address, 0, async () => {throw new Error('private SMTP response or credential');});
+  const ref = db.doc(`welcomeEmails/${address}`);
+  assert.equal((await ref.get()).get('status'), 'uncertain');
+  assert(!JSON.stringify((await ref.get()).data()).includes('private SMTP'));
+  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
+  await call(owner, 'retryWelcomeEmail', {email: address, revision: 0, confirmUncertain: true});
+  await ref.update({status: 'sending', claim: 'crashed-worker', updatedAt: Date.now() - WELCOME_LEASE_MS - 1000});
+  let sends = 0;
+  await deliverWelcome(address, 1, async () => {sends++;});
+  assert.equal(sends, 0); assert.equal((await ref.get()).get('status'), 'uncertain');
+  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 1, confirmUncertain: 'true'}), 'FAILED_PRECONDITION');
+});
+test('revoked, removed, and promoted customers are not welcomed by queued jobs', async () => {
+  for (const action of ['revoked', 'removed', 'promoted']) {
+    const address = `welcome-${action}@example.com`;
+    await call(owner, 'addCustomers', {emails: address});
+    const member = db.doc(`members/${address}`);
+    if (action === 'removed') await member.delete();
+    else await member.update(action === 'revoked' ? {active: false} : {role: 'admin'});
+    let sends = 0;
+    await deliverWelcome(address, 0, async () => {sends++;});
+    assert.equal(sends, 0); assert.equal((await db.doc(`welcomeEmails/${address}`).get()).get('status'), 'cancelled');
+    await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), action === 'removed' ? 'NOT_FOUND' : 'FAILED_PRECONDITION');
+  }
+});
+test('direct clients cannot inspect welcome jobs, inject mail, or mark a message sent', async () => {
+  for (const context of [env.unauthenticatedContext(), env.authenticatedContext(customer.uid, {email: customer.email}), env.authenticatedContext(owner.uid, {email: owner.email, admin: true})]) {
+    const target = doc(context.firestore(), 'welcomeEmails/welcome-new@example.com');
+    await assertFails(getDoc(target));
+    await assertFails(setDoc(target, {status: 'queued', to: 'attacker@example.com', html: 'spam'}));
+    await assertFails(setDoc(target, {status: 'sent'}, {merge: true}));
+    await assertFails(deleteDoc(target));
+  }
 });

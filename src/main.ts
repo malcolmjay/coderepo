@@ -7,10 +7,11 @@ import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "../functions/src/upload-conf
 import { DOWNLOAD_LICENSE } from "../functions/src/download-license.js";
 import {communityPage} from "./community";
 import {enhancementsPage} from "./enhancements";
+import {welcomeLabel, type WelcomeStatus} from "./welcome-status";
 
 type Access = {email: string; role: "admin" | "customer"};
 type Release = {id: string; title: string; version: string; kind: string; compatibility: string; notes: string; sha256: string; filename: string; size: number; published: boolean; status: string; publishedAt: number | null; createdAt: number};
-type Customer = {email: string; source: string; role: string; active: boolean};
+type Customer = {email: string; source: string; role: string; active: boolean; welcome?: WelcomeStatus | null};
 type Event = {id: string; actor: string; action: string; target: string; createdAt: number};
 type Page<T> = {items: T[]; next: string | null};
 const categories: Record<string, string> = {firmware: "Firmware", software: "Camera software", models: "3D files", guide: "Guides"};
@@ -236,29 +237,53 @@ async function customersPage(token: number) {
   const first = await client.api<Page<Customer>>("customers"); if (token !== navigating) return;
   let customers = first.items; let cursor = first.next;
   main.innerHTML = heading("Customer access.", "Every purchase source, one email list.") + adminNav("customers")
-    + `<div id="customer-import"></div><div class="filters"><label class="sr-only" for="customer-search">Search loaded customers</label><input id="customer-search" type="search" placeholder="Search loaded customers by email or purchase source"></div><div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Customer access list"><table><thead><tr><th>Email</th><th>Source</th><th>Access</th><th>Action</th></tr></thead><tbody id="customers"></tbody></table></div><button class="button secondary load-more" id="more" ${cursor ? "" : "hidden"}>Load more customers</button>`;
+    + `<div id="customer-import"></div><div class="filters"><label class="sr-only" for="customer-search">Search loaded customers</label><input id="customer-search" type="search" placeholder="Search loaded customers by email or purchase source"><button id="refresh-customers" class="button secondary">Refresh list</button></div><p class="fine">Welcome emails are sent to newly added customers. “Sent” means accepted by the mail service; inbox delivery can vary. Refresh the list to check progress.</p><div class="table-wrap admin-table" tabindex="0" role="region" aria-label="Customer access list"><table><thead><tr><th>Email</th><th>Source</th><th>Access</th><th>Welcome email</th><th>Action</th></tr></thead><tbody id="customers"></tbody></table></div><button class="button secondary load-more" id="more" ${cursor ? "" : "hidden"}>Load more customers</button>`;
   const draw = () => {
     const query = document.querySelector<HTMLInputElement>("#customer-search")!.value.toLowerCase();
-    document.querySelector("#customers")!.innerHTML = customers.filter(c => `${c.email} ${c.source}`.toLowerCase().includes(query)).map(c => `<tr><td>${esc(c.email)}${c.role === "admin" ? '<small class="table-sub">Administrator</small>' : ""}</td><td>${esc(c.source || "—")}</td><td><span class="badge ${c.active ? "" : "muted"}">${c.active ? "Active" : "Revoked"}</span></td><td>${c.role === "admin" ? "—" : `<button class="link-button ${c.active ? "danger" : ""}" data-email="${esc(c.email)}" data-active="${!c.active}">${c.active ? "Revoke" : "Restore"}</button>`}</td></tr>`).join("") || '<tr><td colspan="4">No customers found.</td></tr>';
+    document.querySelector("#customers")!.innerHTML = customers.filter(c => `${c.email} ${c.source}`.toLowerCase().includes(query)).map(c => `<tr><td>${esc(c.email)}${c.role === "admin" ? '<small class="table-sub">Administrator</small>' : ""}</td><td>${esc(c.source || "—")}</td><td><span class="badge ${c.active ? "" : "muted"}">${c.active ? "Active" : "Revoked"}</span></td><td>${esc(welcomeLabel(c.welcome))}${c.welcome?.sentAt ? `<small class="table-sub">${esc(date(c.welcome.sentAt))}</small>` : ""}${c.active && c.role === "customer" && c.welcome?.canRetry ? `<button class="link-button table-sub" data-welcome="${esc(c.email)}" aria-label="Retry welcome email for ${esc(c.email)}">Retry email</button>` : ""}</td><td>${c.role === "admin" ? "—" : `<button class="link-button ${c.active ? "danger" : ""}" data-email="${esc(c.email)}" data-active="${!c.active}">${c.active ? "Revoke" : "Restore"}</button>`}</td></tr>`).join("") || '<tr><td colspan="5">No customers found.</td></tr>';
   }; draw();
   document.querySelector("#customer-search")!.addEventListener("input", draw);
+  const refreshCustomers = async () => {
+    const refreshed = await client.api<Page<Customer>>("customers"); if (token !== navigating) return;
+    customers = refreshed.items; cursor = refreshed.next;
+    document.querySelector<HTMLButtonElement>("#more")!.hidden = !cursor; draw();
+  };
+  document.querySelector("#refresh-customers")!.addEventListener("click", async event => {
+    const button = event.currentTarget as HTMLButtonElement; button.disabled = true;
+    try {await refreshCustomers();} catch (error) {notice(errorMessage(error), true);} finally {button.disabled = false;}
+  });
   mountCustomerImport(document.querySelector<HTMLElement>("#customer-import")!, {
     send: batch => client.api<{added: number; skipped: number}>("addCustomers", {emails: batch.emails.join("\n"), source: batch.source}),
     busy: value => {
       importing = value;
-      document.querySelectorAll<HTMLButtonElement>("#nav button, #customers button, #more").forEach(button => {button.disabled = value;});
+      document.querySelectorAll<HTMLButtonElement>("#nav button, #customers button, #more, #refresh-customers").forEach(button => {button.disabled = value;});
       document.querySelectorAll<HTMLAnchorElement>(".header a, .admin-nav a").forEach(link => {
         if (value) link.setAttribute("aria-disabled", "true"); else link.removeAttribute("aria-disabled");
       });
     },
-    complete: async () => {
-      const refreshed = await client.api<Page<Customer>>("customers"); if (token !== navigating) return;
-      customers = refreshed.items; cursor = refreshed.next;
-      document.querySelector<HTMLButtonElement>("#more")!.hidden = !cursor; draw();
-    },
+    complete: refreshCustomers,
     error: errorMessage,
   });
   document.querySelector("#customers")!.addEventListener("click", async event => {
+    const retry = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-welcome]");
+    if (retry) {
+      const customer = customers.find(item => item.email === retry.dataset.welcome);
+      if (!customer?.welcome?.canRetry) return;
+      const uncertain = customer.welcome.status === "uncertain";
+      const message = uncertain
+        ? `The mail service may already have sent this welcome to ${customer.email}. Check its delivery log before retrying. Send another attempt?`
+        : `Retry the welcome email to ${customer.email}? If sender setup is needed, configure it before retrying.`;
+      if (!confirm(message)) return;
+      retry.disabled = true;
+      try {
+        await client.api("retryWelcomeEmail", {email: customer.email, revision: customer.welcome.revision, confirmUncertain: uncertain});
+        if (token !== navigating) return;
+        // Preserve loaded pages and the import form while showing the queued retry.
+        customer.welcome = {...customer.welcome, status: "queued", error: null, canRetry: false, revision: customer.welcome.revision + 1};
+        draw(); notice("Welcome email queued. Refresh the list to check delivery.");
+      } catch (error) {notice(errorMessage(error), true); retry.disabled = false;}
+      return;
+    }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-email]"); if (!button) return;
     const active = button.dataset.active === "true";
     if (!active && !confirm(`Revoke access for ${button.dataset.email}? New downloads will be blocked.`)) return;
@@ -316,7 +341,7 @@ async function route() {
 
 document.addEventListener("click", event => {
   if (uploading && (event.target as Element).closest(".header a, #nav button, .admin-nav a, .footer a")) {event.preventDefault(); event.stopImmediatePropagation();}
-  if (importing && (event.target as Element).closest(".header a, #nav button, .admin-nav a, #customers button, #more")) {event.preventDefault(); event.stopImmediatePropagation();}
+  if (importing && (event.target as Element).closest(".header a, #nav button, .admin-nav a, #customers button, #more, #refresh-customers")) {event.preventDefault(); event.stopImmediatePropagation();}
 }, true);
 window.addEventListener("hashchange", () => {
   if (uploading) {history.replaceState(null, "", uploadPage); return;}

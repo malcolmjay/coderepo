@@ -2,10 +2,11 @@
 
 A small customer portal for WLV-01 firmware, camera software, printable parts, and guides. Customers from Shopify, Kickstarter, and direct sales share one authorized email list.
 
-The application now runs entirely within **one Firebase project**: Hosting, Authentication, Firestore, Cloud Storage, and one callable Cloud Function. Firebase sends the magic-link emails. There is no Django server, database server, email worker, S3 account, or external SMTP service to operate.
+The application runs in **one Firebase project**: Hosting, Authentication, Firestore, Cloud Storage, a callable API, and a background welcome-email Function. Firebase sends the magic-link emails. Branded customer welcomes use an authenticated SMTP sender configured once in Firebase Secret Manager; see [welcome email setup](docs/WELCOME_EMAIL.md).
 
 ## Included
 
+- Automatic branded welcome emails for newly added customers, including bulk imports, with admin delivery status and guarded retries.
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
 - Community Builds for customer-made STL designs and code changes, with contributor names, private drafts, shared downloads, and uploader/admin-only editing, replacement, publication, and deletion.
@@ -18,7 +19,7 @@ The application now runs entirely within **one Firebase project**: Hosting, Auth
 - Private, immutable file objects with generation-pinned download URLs that expire after 60 seconds. Permanent Firebase download tokens are removed during upload verification.
 - Firebase emulator integration tests, TypeScript builds, GitHub Actions, and monthly dependency update PRs.
 
-**Status:** application code and deployment instructions are provided. No production Firebase project, billing account, domain, administrator email, customer list, or release payload has been provisioned. Production email delivery and signed downloads require the live smoke checks in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+**Deployment:** repository changes do not deploy automatically. The new welcome-email sender requires [one-time setup](docs/WELCOME_EMAIL.md), a Functions/Hosting deployment, and a real mailbox smoke check. Production signing and mail delivery cannot be established by emulator tests.
 
 ## Local development
 
@@ -60,7 +61,7 @@ The admin website manages customers and files. Administrator privileges are mana
 node scripts/admin.mjs --project YOUR_PROJECT_ID --email you@example.com --grant
 ```
 
-All approved customers see all published releases. A Firebase identity alone does not grant file access. Unknown emails can verify their identity but receive no customer data or downloads. Adding customers sends no invitation. Bulk-adding an existing email leaves its access state unchanged. After access is revoked and restored, a new sign-in is required.
+All approved customers see all published releases. A Firebase identity alone does not grant file access. Unknown emails can verify their identity but receive no customer data or downloads. Adding a new customer queues a welcome email with the portal link and sign-in instructions. Bulk-adding an existing email leaves its access state unchanged. After access is revoked and restored, a new sign-in is required.
 
 ## Import the initial customer list
 
@@ -69,7 +70,7 @@ All approved customers see all published releases. A Firebase identity alone doe
 3. Select **Review customer list**. The preview shows unique valid emails, duplicates removed, and invalid rows. Download the row issue report to correct errors; importing the valid entries is also available.
 4. Select **Import customers**. Keep the page open until it finishes. The progress display reports added customers and existing entries left unchanged. You can pause and resume, including after a connection failure.
 
-One import accepts up to 10,000 rows. Emails are trimmed and lowercased, and duplicate emails use their first valid occurrence. Existing records keep their role, purchase source, and active/revoked state. No invitation emails are sent; authorized customers request their own sign-in link from the portal.
+One import accepts up to 10,000 rows. Emails are trimmed and lowercased, and duplicate emails use their first valid occurrence. Existing records keep their role, purchase source, and active/revoked state. Each newly created customer gets a welcome email once the SMTP sender is configured. Existing entries are not emailed again. Customers still request their own secure sign-in link from the portal; welcomes never contain login credentials.
 
 Imports use the existing administrator-only endpoint in batches of at most 100, grouped by purchase source. Every batch checks current administrator access and commits atomically. Completed batches remain saved if a later batch fails. Resume retries the unconfirmed batch; if its response was lost after saving, those addresses appear as existing entries. Progress is held only in the open page. After a reload, safely import the same list again; existing records will be skipped.
 

@@ -5,6 +5,7 @@ dist/
 .firebaserc
 .env*
 !.env.example
+.secret.local
 *-debug.log*
 *service-account*.json
 *credentials*.json
