@@ -608,7 +608,8 @@ test('a silently added customer can request their own one-time sign-in link and 
   assert.deepEqual(await call(user, 'access'), {email: address, role: 'customer'});
   assert(Array.isArray((await call(user, 'releases')).items));
   assert.equal((await db.doc(`welcomeEmails/${address}`).get()).exists, false);
-  assert.equal((await emailCodes(address)).length, 1);
+  assert(user.oobCode, 'the customer explicitly requested and used a sign-in code');
+  assert.deepEqual(await emailCodes(address), [], 'a consumed code is removed by the Auth emulator');
   const replay = await json('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=demo-key', {email: address, oobCode: user.oobCode});
   assert(replay.error, 'the requested sign-in link remains single-use');
 });
