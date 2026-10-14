@@ -1,7 +1,6 @@
 import {after, before, test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {initializeApp as initializeAdmin, deleteApp as deleteAdmin} from 'firebase-admin/app';
 import {getFirestore} from 'firebase-admin/firestore';
 import {getStorage as getAdminStorage} from 'firebase-admin/storage';
@@ -9,15 +8,11 @@ import {initializeTestEnvironment, assertFails, assertSucceeds} from '@firebase/
 import {doc, getDoc, setDoc, deleteDoc} from 'firebase/firestore';
 import {ref, uploadBytes, getBytes, getMetadata, updateMetadata, deleteObject} from 'firebase/storage';
 import {DOWNLOAD_LICENSE} from '../functions/lib/download-license.js';
-import {deliverWelcome, WelcomeSendError, WELCOME_LEASE_MS} from '../functions/lib/welcome-service.js';
-import {firebaseWelcomeSender} from '../functions/lib/welcome-firebase.js';
 
 const projectId = 'demo-camera-portal';
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Run tests with npm run test:emulators.');
 const admin = initializeAdmin({projectId, storageBucket: `${projectId}.appspot.com`});
 const db = getFirestore(admin);
-const workerSdk = createRequire(new URL('../functions/package.json', import.meta.url))('firebase-admin/app');
-const workerAdmin = workerSdk.getApps()[0] ?? workerSdk.initializeApp({projectId});
 let env;
 let owner;
 let customer;
@@ -60,7 +55,7 @@ before(async () => {
   }
   owner = await login('admin@example.com'); customer = await login('customer@example.com'); stranger = await login('stranger@example.com'); revoked = await login('revoked@example.com');
 });
-after(async () => {await env?.cleanup(); if (workerAdmin !== admin) await workerSdk.deleteApp(workerAdmin); await deleteAdmin(admin);});
+after(async () => {await env?.cleanup(); await deleteAdmin(admin);});
 
 test('real email-link sign-in grants only approved emails portal access', async () => {
   assert.equal((await call(customer, 'access')).role, 'customer');
@@ -544,155 +539,76 @@ test('concurrent enhancement deletion, likes, reviews, and submission retries ca
   assert.equal(audits.length, 1);
 });
 
-test('customer creation atomically queues one welcome; concurrent reimports and access restores do not resend', async () => {
-  const results = await Promise.all(Array.from({length: 2}, () => call(owner, 'addCustomers', {emails: ' WELCOME-NEW@example.com, welcome-new@example.com\nrevoked@example.com', source: 'Shopify', html: 'forged', to: 'other@example.com'})));
+async function emailCodes(address) {
+  const response = await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`);
+  assert(response.ok);
+  const {oobCodes} = await response.json();
+  return oobCodes.filter(code => code.email === address);
+}
+
+test('adding and reimporting a customer grants access without queuing or requesting email', async () => {
+  const address = 'quiet-new@example.com';
+  const payload = {emails: ` QUIET-NEW@example.com, ${address}\nrevoked@example.com`, source: 'Shopify', sendWelcome: true, welcomePending: true, to: 'other@example.com', html: 'forged'};
+  const results = await Promise.all([call(owner, 'addCustomers', payload), call(owner, 'addCustomers', payload)]);
   assert.equal(results.reduce((total, item) => total + item.added, 0), 1);
-  const job = db.doc('welcomeEmails/welcome-new@example.com');
-  const initial = (await job.get()).data();
-  assert.equal(initial.status, 'queued'); assert.equal(initial.revision, 0); assert.equal(initial.attempts, 0);
-  assert.equal(initial.memberCreatedAt, (await db.doc('members/welcome-new@example.com').get()).get('createdAt'));
-  assert.equal(initial.html, undefined); assert.equal(initial.to, undefined);
-  assert.equal((await db.doc('welcomeEmails/revoked@example.com').get()).exists, false);
-  await call(owner, 'setAccess', {email: 'welcome-new@example.com', active: false});
-  await call(owner, 'setAccess', {email: 'welcome-new@example.com', active: true});
-  assert.deepEqual((await job.get()).data(), initial);
+  const member = (await db.doc(`members/${address}`).get()).data();
+  assert.equal(member.active, true); assert.equal(member.role, 'customer'); assert.equal(member.source, 'Shopify');
+  assert.equal(member.welcomePending, undefined); assert.equal(member.sendWelcome, undefined);
+  assert.equal((await db.doc('members/revoked@example.com').get()).get('active'), false);
+  await call(owner, 'setAccess', {email: address, active: false});
+  await call(owner, 'setAccess', {email: address, active: true});
+  assert.equal((await db.collection('welcomeEmails').get()).size, 0);
+  assert.deepEqual(await emailCodes(address), []);
 });
-test('full 100-customer batch creates exactly 100 welcome jobs and reimport creates none', async () => {
-  const emails = Array.from({length: 100}, (_, i) => `welcome-batch-${i}@example.com`);
-  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n')}), {added: 100, skipped: 0});
-  const jobs = await db.getAll(...emails.map(address => db.doc(`welcomeEmails/${address}`)));
-  assert.equal(jobs.filter(job => job.exists && job.get('status') === 'queued').length, 100);
-  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n')}), {added: 0, skipped: 100});
-  const repeated = await db.getAll(...jobs.map(job => job.ref));
-  assert.deepEqual(repeated.map(job => job.data()), jobs.map(job => job.data()));
+
+test('a full 100-customer import and its replay create no invitation jobs or sign-in codes', async () => {
+  const emails = Array.from({length: 100}, (_, i) => `quiet-batch-${i}@example.com`);
+  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n'), source: 'Kickstarter'}), {added: 100, skipped: 0});
+  assert.deepEqual(await call(owner, 'addCustomers', {emails: emails.join('\n'), source: 'Changed'}), {added: 0, skipped: 100});
+  const members = await db.getAll(...emails.map(address => db.doc(`members/${address}`)));
+  assert(members.every(member => member.get('active') === true && member.get('source') === 'Kickstarter'));
+  assert.equal((await db.collection('welcomeEmails').get()).size, 0);
+  const {oobCodes} = await (await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`)).json();
+  assert.equal(oobCodes.filter(code => emails.includes(code.email)).length, 0);
 });
-test('welcome worker claims once across concurrent event delivery and ignores completed event replays', async () => {
-  const address = 'welcome-once@example.com';
+
+test('previously queued invitations stay untouched and the retired retry endpoint cannot send', async () => {
+  const address = 'aaa-legacy-invitation@example.com';
   await call(owner, 'addCustomers', {emails: address});
-  let started, finish, sends = 0;
-  const entered = new Promise(resolve => {started = resolve;});
-  const unblock = new Promise(resolve => {finish = resolve;});
-  const sender = async message => {
-    sends++; assert.deepEqual(message, {to: address}); started(); await unblock;
-  };
-  const first = deliverWelcome(address, 0, sender);
-  await entered;
-  await assert.rejects(deliverWelcome(address, 0, sender), /already in progress/);
-  finish(); await first;
-  await deliverWelcome(address, 0, sender);
-  const job = (await db.doc(`welcomeEmails/${address}`).get()).data();
-  assert.equal(job.status, 'sent'); assert.equal(job.attempts, 1); assert.equal(sends, 1); assert(job.sentAt);
-  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
-});
-test('Firebase invitation failure preserves customer access and exposes only sanitized admin status', async () => {
-  const address = 'aaa-welcome-failure@example.com';
-  await call(owner, 'addCustomers', {emails: address});
-  await deliverWelcome(address, 0, async () => {throw new WelcomeSendError('setup');});
-  const job = (await db.doc(`welcomeEmails/${address}`).get()).data();
-  assert.equal(job.status, 'failed'); assert.equal(job.error, 'setup');
-  assert.equal((await db.doc(`members/${address}`).get()).get('active'), true);
+  const member = db.doc(`members/${address}`), job = db.doc(`welcomeEmails/${address}`);
+  await member.update({welcomePending: true}); // A record left by the prior version.
+  const original = {status: 'queued', revision: 1, attempts: 0, memberCreatedAt: (await member.get()).get('createdAt'), createdAt: 1, updatedAt: 1};
+  await job.set(original);
+  assert.deepEqual(await call(owner, 'addCustomers', {emails: address}), {added: 0, skipped: 1});
+  await call(owner, 'setAccess', {email: address, active: false});
+  await call(owner, 'setAccess', {email: address, active: true});
+  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 1, confirmUncertain: true}), 'INVALID_ARGUMENT');
+  for (const user of [customer, stranger, revoked]) await denied(call(user, 'retryWelcomeEmail', {email: address, revision: 1}));
+  await denied(call(null, 'retryWelcomeEmail', {email: address, revision: 1}), 'UNAUTHENTICATED');
+  assert.deepEqual((await job.get()).data(), original);
+  assert.deepEqual(await emailCodes(address), []);
   const listed = (await call(owner, 'customers')).items.find(item => item.email === address);
-  assert.equal(listed.welcome.error, 'setup'); assert.equal(listed.welcome.canRetry, true);
-  assert.equal(listed.welcome.claim, undefined); assert.equal(listed.welcome.memberCreatedAt, undefined);
+  assert(listed); assert.equal(listed.welcome, undefined);
 });
-test('only current admins can retry a failed welcome and replaying the retry is idempotent', async () => {
-  const address = 'welcome-retry@example.com';
-  await call(owner, 'addCustomers', {emails: address});
-  await deliverWelcome(address, 0, async () => {throw new WelcomeSendError('rejected');});
-  for (const account of [customer, stranger, revoked]) await denied(call(account, 'retryWelcomeEmail', {email: address, revision: 0}));
-  await denied(call(null, 'retryWelcomeEmail', {email: address, revision: 0}), 'UNAUTHENTICATED');
-  await denied(call(owner, 'retryWelcomeEmail', {email: 'customer@example.com', revision: 0}), 'NOT_FOUND');
-  const payload = {email: address, revision: 0, to: 'forged@example.com', html: '<b>forged</b>'};
-  await Promise.all([call(owner, 'retryWelcomeEmail', payload), call(owner, 'retryWelcomeEmail', payload)]);
-  const job = db.doc(`welcomeEmails/${address}`);
-  assert.equal((await job.get()).get('revision'), 1);
-  let sends = 0;
-  await deliverWelcome(address, 0, async () => {sends++;});
-  assert.equal(sends, 0, 'an old event cannot claim a later retry');
-  await deliverWelcome(address, 1, async message => {sends++; assert.equal(message.to, address); assert.deepEqual(message, {to: address});});
-  await call(owner, 'retryWelcomeEmail', payload);
-  assert.equal((await job.get()).get('status'), 'sent'); assert.equal(sends, 1);
-  const events = await db.collection('activity').where('action', '==', 'Sign-in invitation retried').get();
-  assert.equal(events.docs.filter(event => event.get('target') === address).length, 1);
-});
-test('ambiguous delivery needs explicit confirmation; stale sending claims do not automatically resend', async () => {
-  const address = 'welcome-uncertain@example.com';
-  await call(owner, 'addCustomers', {emails: address});
-  await deliverWelcome(address, 0, async () => {throw new Error('private Firebase response or credential');});
-  const ref = db.doc(`welcomeEmails/${address}`);
-  assert.equal((await ref.get()).get('status'), 'uncertain');
-  assert(!JSON.stringify((await ref.get()).data()).includes('private Firebase'));
-  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), 'FAILED_PRECONDITION');
-  await call(owner, 'retryWelcomeEmail', {email: address, revision: 0, confirmUncertain: true});
-  await ref.update({status: 'sending', claim: 'crashed-worker', updatedAt: Date.now() - WELCOME_LEASE_MS - 1000});
-  let sends = 0;
-  await deliverWelcome(address, 1, async () => {sends++;});
-  assert.equal(sends, 0); assert.equal((await ref.get()).get('status'), 'uncertain');
-  await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 1, confirmUncertain: 'true'}), 'FAILED_PRECONDITION');
-});
-test('revoked, removed, and promoted customers are not welcomed by queued jobs', async () => {
-  for (const action of ['revoked', 'removed', 'promoted']) {
-    const address = `welcome-${action}@example.com`;
-    await call(owner, 'addCustomers', {emails: address});
-    const member = db.doc(`members/${address}`);
-    if (action === 'removed') await member.delete();
-    else await member.update(action === 'revoked' ? {active: false} : {role: 'admin'});
-    let sends = 0;
-    await deliverWelcome(address, 0, async () => {sends++;});
-    assert.equal(sends, 0); assert.equal((await db.doc(`welcomeEmails/${address}`).get()).get('status'), 'cancelled');
-    await denied(call(owner, 'retryWelcomeEmail', {email: address, revision: 0}), action === 'removed' ? 'NOT_FOUND' : 'FAILED_PRECONDITION');
-  }
-});
-test('direct clients cannot inspect welcome jobs, inject mail, or mark a message sent', async () => {
+
+test('direct clients still cannot inspect or modify legacy invitation records', async () => {
   for (const context of [env.unauthenticatedContext(), env.authenticatedContext(customer.uid, {email: customer.email}), env.authenticatedContext(owner.uid, {email: owner.email, admin: true})]) {
-    const target = doc(context.firestore(), 'welcomeEmails/welcome-new@example.com');
+    const target = doc(context.firestore(), 'welcomeEmails/aaa-legacy-invitation@example.com');
     await assertFails(getDoc(target));
-    await assertFails(setDoc(target, {status: 'queued', to: 'attacker@example.com', html: 'spam'}));
-    await assertFails(setDoc(target, {status: 'sent'}, {merge: true}));
+    await assertFails(setDoc(target, {status: 'queued', to: 'attacker@example.com'}));
     await assertFails(deleteDoc(target));
   }
 });
 
-test('Firebase invitation completes real emulator sign-in and the welcome dismissal persists for only that customer', async () => {
-  const address = 'firebase-invited@example.com';
+test('a silently added customer can request their own one-time sign-in link and access downloads', async () => {
+  const address = 'quiet-signin@example.com';
   await call(owner, 'addCustomers', {emails: address});
-  assert.equal((await db.doc(`members/${address}`).get()).get('welcomePending'), true);
-  let sends = 0;
-  const sender = firebaseWelcomeSender(projectId, async (url, options) => {
-    if (url === `https://${projectId}.web.app/__/firebase/init.json`) return new Response(JSON.stringify({projectId, apiKey: 'demo-key'}), {status: 200});
-    assert.equal(url, 'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=demo-key');
-    const payload = JSON.parse(options.body);
-    assert.equal(payload.requestType, 'EMAIL_SIGNIN'); assert.equal(payload.email, address);
-    assert.equal(payload.continueUrl, `https://${projectId}.web.app/`);
-    assert.equal(payload.returnOobLink, undefined); assert.equal(payload.html, undefined);
-    sends++;
-    return fetch('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=demo-key', options);
-  });
-  await deliverWelcome(address, 0, sender);
-  await deliverWelcome(address, 0, sender);
-  assert.equal(sends, 1);
-  assert.equal((await db.doc(`welcomeEmails/${address}`).get()).get('status'), 'sent');
-  const {oobCodes} = await (await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`)).json();
-  const invitation = oobCodes.filter(item => item.email === address && item.requestType === 'EMAIL_SIGNIN').at(-1);
-  assert(invitation);
-  const auth = await json('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=demo-key', {email: address, oobCode: invitation.oobCode});
-  assert(auth.idToken, JSON.stringify(auth));
-  const invited = {token: auth.idToken, uid: auth.localId, email: address};
-  assert.equal((await call(invited, 'access')).welcomePending, true);
-  const before = (await db.doc('members/welcome-new@example.com').get()).data();
-  await call(invited, 'dismissWelcome', {email: 'welcome-new@example.com', role: 'admin', active: false});
-  await call(invited, 'dismissWelcome');
-  assert.equal((await call(invited, 'access')).welcomePending, false);
-  assert.deepEqual((await db.doc('members/welcome-new@example.com').get()).data(), before);
-  const member = (await db.doc(`members/${address}`).get()).data();
-  assert.equal(member.active, true); assert.equal(member.role, 'customer');
-  assert.equal((await call(await login(address), 'access')).welcomePending, false, 'dismissal survives a fresh session');
-  assert.equal((await call(owner, 'access')).welcomePending, false);
-  assert.equal((await call(customer, 'access')).welcomePending, false, 'existing customers are not backfilled');
-  assert(!JSON.stringify((await db.doc(`welcomeEmails/${address}`).get()).data()).includes(invitation.oobCode));
-});
-test('unapproved, unauthenticated, and revoked sessions cannot dismiss another customer welcome', async () => {
-  for (const user of [stranger, revoked]) await denied(call(user, 'dismissWelcome', {email: 'welcome-new@example.com'}));
-  await denied(call(null, 'dismissWelcome', {email: 'welcome-new@example.com'}), 'UNAUTHENTICATED');
-  assert.equal((await db.doc('members/welcome-new@example.com').get()).get('welcomePending'), true);
+  assert.deepEqual(await emailCodes(address), []);
+  const user = await login(address);
+  assert.deepEqual(await call(user, 'access'), {email: address, role: 'customer'});
+  assert(Array.isArray((await call(user, 'releases')).items));
+  assert.equal((await db.doc(`welcomeEmails/${address}`).get()).exists, false);
+  assert.equal((await emailCodes(address)).length, 1);
+  const replay = await json('http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithEmailLink?key=demo-key', {email: address, oobCode: user.oobCode});
+  assert(replay.error, 'the requested sign-in link remains single-use');
 });

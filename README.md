@@ -2,11 +2,11 @@
 
 A small customer portal for WLV-01 firmware, camera software, printable parts, and guides. Customers from Shopify, Kickstarter, and direct sales share one authorized email list.
 
-The application runs in **one Firebase project**: Hosting, Authentication, Firestore, Cloud Storage, a callable API, and a background invitation Function. Firebase sends both customer-requested sign-in links and automatic invitations from the existing Authentication sender. The branded welcome appears inside the portal; there is no SMTP account or external email service to configure. See [invitations and welcome](docs/WELCOME_EMAIL.md).
+The application runs in **one Firebase project**: Hosting, Authentication, Firestore, Cloud Storage, and a callable API. Adding customers grants access without sending an email. Customers request their own sign-in links through the portal, using Firebase’s existing Authentication sender. No SMTP account or external email service is needed.
 
 ## Included
 
-- Automatic Firebase sign-in invitations for newly added customers, including bulk imports, with admin delivery status and guarded retries, plus a dismissible branded welcome inside the portal.
+- Customer enrollment and bulk imports without welcome emails or automatic sign-in invitations.
 - Passwordless email links, including a confirmation form when a link is opened on another device.
 - A responsive download library with categories, search, versions, compatibility, release notes, and optional publisher-provided SHA-256 checksums.
 - Community Builds for customer-made STL designs and code changes, with contributor names, private drafts, shared downloads, and uploader/admin-only editing, replacement, publication, and deletion.
@@ -19,7 +19,7 @@ The application runs in **one Firebase project**: Hosting, Authentication, Fires
 - Private, immutable file objects with generation-pinned download URLs that expire after 60 seconds. Permanent Firebase download tokens are removed during upload verification.
 - Firebase emulator integration tests, TypeScript builds, GitHub Actions, and monthly dependency update PRs.
 
-**Deployment:** repository changes do not deploy automatically. The invitation update requires a Functions/Hosting deployment and a real mailbox smoke check; see [deployment instructions](docs/WELCOME_EMAIL.md). Production signing and mail delivery cannot be established by emulator tests.
+**Deployment:** repository changes do not deploy automatically. Deploy Functions and Hosting to apply the invitation rollback and accept deletion of the old `sendWelcomeEmail` function if prompted. See [deployment instructions](docs/DEPLOYMENT.md#removing-the-previous-automatic-invitations).
 
 ## Local development
 
@@ -61,7 +61,7 @@ The admin website manages customers and files. Administrator privileges are mana
 node scripts/admin.mjs --project YOUR_PROJECT_ID --email you@example.com --grant
 ```
 
-All approved customers see all published releases. A Firebase identity alone does not grant file access. Unknown emails can verify their identity but receive no customer data or downloads. Adding a new customer queues a standard Firebase sign-in invitation. Bulk-adding an existing email leaves its access state unchanged. After access is revoked and restored, a new sign-in is required.
+All approved customers see all published releases. A Firebase identity alone does not grant file access. Unknown emails can verify their identity but receive no customer data or downloads. Adding a new customer saves their access without sending an email. Bulk-adding an existing email leaves its access state unchanged. After access is revoked and restored, a new sign-in is required.
 
 ## Import the initial customer list
 
@@ -70,7 +70,7 @@ All approved customers see all published releases. A Firebase identity alone doe
 3. Select **Review customer list**. The preview shows unique valid emails, duplicates removed, and invalid rows. Download the row issue report to correct errors; importing the valid entries is also available.
 4. Select **Import customers**. Keep the page open until it finishes. The progress display reports added customers and existing entries left unchanged. You can pause and resume, including after a connection failure.
 
-One import accepts up to 10,000 rows. Emails are trimmed and lowercased, and duplicate emails use their first valid occurrence. Existing records keep their role, purchase source, and active/revoked state. Each newly created customer gets a standard Firebase sign-in link from the existing no-reply sender. Existing entries are not emailed again. The branded welcome appears on their Downloads page until dismissed. If an invitation link expires, customers can request a fresh link through the portal.
+One import accepts up to 10,000 rows. Emails are trimmed and lowercased, and duplicate emails use their first valid occurrence. Existing records keep their role, purchase source, and active/revoked state. Adding or reimporting customers does not send an email. Share the portal address with customers through your usual purchase instructions; they can request a sign-in link when ready.
 
 Imports use the existing administrator-only endpoint in batches of at most 100, grouped by purchase source. Every batch checks current administrator access and commits atomically. Completed batches remain saved if a later batch fails. Resume retries the unconfirmed batch; if its response was lost after saving, those addresses appear as existing entries. Progress is held only in the open page. After a reload, safely import the same list again; existing records will be skipped.
 
