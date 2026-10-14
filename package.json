@@ -1,0 +1,26 @@
+{
+  "name": "camera-hacks-downloads",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && npm --prefix functions run build",
+    "test": "npm --prefix functions run build && node --test tests/unit.test.mjs tests/customer-import.test.mjs",
+    "test:emulators": "npm run build && firebase emulators:exec --project demo-camera-portal --only auth,firestore,storage,functions 'node --test --test-concurrency=1 tests/integration.test.mjs'",
+    "emulators": "npm --prefix functions run build && firebase emulators:start --project demo-camera-portal --only auth,firestore,storage,functions",
+    "seed:local": "node scripts/seed-local.mjs",
+    "deploy": "npm run build && firebase deploy --only firestore,storage,functions,hosting"
+  },
+  "dependencies": {"firebase": "12.19.0"},
+  "overrides": {"@grpc/grpc-js": "^1.13.6", "gaxios": {"uuid": "^11.1.1"}},
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "@types/node": "^22.19.0",
+    "firebase-admin": "14.5.0",
+    "firebase-tools": "15.32.0",
+    "typescript": "~5.9.3",
+    "vite": "8.3.1"
+  }
+}
